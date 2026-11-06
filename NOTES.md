@@ -1,4 +1,33 @@
-# iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
+# iOS 16 port: POCO X3 Pro (`vayu`)
+
+## Active Vayu handoff (2026-11-06)
+
+### Confirmed repository state
+- This worktree is based on `origin/main` at merge base `269ef30875b8eaf0280e80e2b3fbad3e6fe8b004`; the active branch is `raduraisa1-creator-vayu-ios16-port`.
+- The checked-in implementation is for Redmi Note 10 Pro (`sweet`, SM7150): the XNU workflow defaults to `MACHINE_CONFIG=SWEET`, `tools/mkadt.py` hardcodes the SM7150/`xiaomi,sweet` identity and sweet MMIO, and all 81 existing XNU patches are sweet-specific.
+- No Vayu source, live device tree, build artifact, or Vayu patch exists in this worktree. The ignored/local `dtb/live/vayu-live.dts` mentioned in the supplied prior-session context is not present here.
+
+### Vayu evidence and confidence
+- The supplied prior-session transcript identifies the target as POCO X3 Pro (`vayu`, M2102J20SG), Qualcomm SM8150 v2, and says the phone was in TWRP with ADB access. That is historical transcript evidence; this session has not independently queried the connected phone.
+- The transcript says a local live-DT checker parsed two memory banks, 22 reserved regions, and UFS at `0x01d84000`. Its raw DT and checker output are not in this checkout, so these values remain leads until the local DT is re-collected and validated here.
+- The transcript reports root compatible strings `qcom,sm8150-cdp` / `qcom,sm8150` and a Samsung EA8076 1080×2400 panel identification. The panel identification is provisional; no Vayu display, input, or UFS driver behavior has been verified.
+- The upstream `ios-sweet` XNU CI run mentioned in the transcript is a successful sweet build, not a Vayu build. No Vayu kernel has been built or booted.
+
+### Work performed in this session
+- Renamed the worktree branch to `raduraisa1-creator-vayu-ios16-port`.
+- Updated `README.md` to identify the Vayu effort as unsupported/in progress and warn that the existing `sweet` userdata-flash instructions must not be used on Vayu.
+- On resuming, PowerShell is available and confirmed HEAD `269ef30` on `raduraisa1-creator-vayu-ios16-port`; the only pending changes were `README.md` and this handoff. No Vayu-specific sources, DT artifacts, or generated images are present in this worktree.
+- `adb` is not on PATH and was not found in the checked common Android SDK locations (`%LOCALAPPDATA%\Android\Sdk\platform-tools`, `C:\Android\platform-tools`, `C:\platform-tools`), so the attached phone could not be independently inspected. This is a host-tooling blocker, not evidence that the phone is disconnected.
+- The previous attempt's PowerShell and web-fetch calls were denied by the runtime. No device read/write, build, CI run, or boot was attempted in either attempt. The HackiOSX page was not independently fetched; its chipset distinction here is from the supplied project context.
+- Validation completed for this documentation milestone: `python -m compileall -q tools` passed; `git diff --check` passed. These checks do not validate or build a Vayu kernel.
+
+### Next concrete actions
+1. Re-run read-only device discovery and retrieve the Vayu live DT into the ignored `dtb/` area; preserve the Android installation and all partition backups.
+2. Verify the transcript's memory/reservation and UFS facts against the actual DT, then inventory interrupt/timer, CPU topology, display, touch, key and storage hardware.
+3. Add a separate Vayu machine configuration/device-tree profile; do not extend or silently repurpose the sweet profile. Compile/test the smallest relevant kernel and shim changes before preparing any boot image.
+4. Only after a Vayu image is built and reviewed, consider a temporary `fastboot boot`. Do not flash or write device storage without fresh explicit confirmation for this exact POCO X3 Pro.
+
+## Historical ios-sweet work log (Redmi Note 10 Pro, SM7150)
 
 ## Agent handoff / active work (2026-10-15, latest)
 

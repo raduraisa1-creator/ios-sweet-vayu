@@ -2,6 +2,30 @@
 
 **Apple's iOS 16 running on a Redmi Note 10 Pro.**
 
+> [!WARNING]
+> **POCO X3 Pro (`vayu`) support is not implemented yet.** This repository currently contains the
+> `sweet` / SM7150 kernel, device-tree generator, and boot instructions only. Do not use the
+> `userdata` image or `fastboot flash` instructions below on a Vayu: they are for a different
+> device and would overwrite its data. No Vayu image has been built or boot-tested here.
+
+## Vayu port status
+
+The target is the POCO X3 Pro (`vayu`, model M2102J20SG), based on Qualcomm SM8150 v2. The current
+`xnu/patches/`, `tools/mkadt.py`, and `shim/` are the proven Redmi Note 10 Pro port; their `SWEET`
+machine configuration and board-specific addresses/drivers must not be assumed to work on Vayu.
+
+The next porting milestone is to bring the Vayu live device tree into this worktree as an ignored,
+local artifact, verify its memory and reserved-memory map, interrupt controller, timer, UFS and
+display resources, then introduce a separate Vayu board profile before attempting an XNU build.
+The prior bring-up transcript reports two RAM banks, 22 reserved regions and UFS at `0x01d84000`;
+these are transcript-derived leads, not independently verified in this checkout. The Samsung
+EA8076 1080×2400 panel identification is also provisional. No partition, boot, recovery, modem,
+persist or backup data has been written by this porting work.
+
+The user-provided [HackiOSX porting guide](https://hackiosx.dev/porting.html) is a sequencing
+reference, not a compatible device configuration: its Snapdragon 778G (SM7325) target differs
+from Vayu's SM8150.
+
 This project ports Apple's open-source XNU kernel (xnu-8796, the iOS 16 generation) to the Xiaomi Redmi Note 10 Pro (`sweet`, Qualcomm SM7150 / Snapdragon 732G). On top of it runs the **unmodified iOS 16.7.16 (20H392) userland of the iPhone X**: launchd, the system daemons, backboardd, SpringBoard and the stock apps.
 
 As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock it, open Settings, pull down Control Center and the notification center, and use the touchscreen and the hardware buttons. Rendering runs entirely on the CPU; there is no GPU driver.
