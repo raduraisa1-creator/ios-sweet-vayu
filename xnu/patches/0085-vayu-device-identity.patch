@@ -1,5 +1,4 @@
 diff --git a/bsd/kern/kern_mib.c b/bsd/kern/kern_mib.c
-index ac1eba0..a4f9159 100644
 --- a/bsd/kern/kern_mib.c
 +++ b/bsd/kern/kern_mib.c
 @@ -521 +521 @@ sysctl_hw_generic(__unused struct sysctl_oid *oidp, void *arg1,

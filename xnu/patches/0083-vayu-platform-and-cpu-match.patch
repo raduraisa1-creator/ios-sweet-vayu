@@ -1,9 +1,7 @@
 diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
-index 7ea8b78..720616b 100644
 --- a/iokit/Kernel/arm/SweetCPU.cpp
 +++ b/iokit/Kernel/arm/SweetCPU.cpp
-@@ -76 +76,8 @@ SweetCPU::start(IOService *provider)
--/* MPIDR Aff1 = core: 0x000-0x500 A55, 0x600/0x700 A76 */
+@@ -75,0 +76,7 @@ SweetCPU::start(IOService *provider)
 +#if defined(VAYU)
 +	if (cpu->phys_id > 0x700 || (cpu->phys_id & 0xff) != 0 ||
 +	    topology->num_cpus > MAX_CPUS) {
@@ -11,7 +9,6 @@ index 7ea8b78..720616b 100644
 +		    cpu->cpu_id, cpu->phys_id, topology->num_cpus);
 +	}
 +#else
-+	/* MPIDR Aff1 = core: 0x000-0x500 A55, 0x600/0x700 A76 */
 @@ -81,0 +89 @@ SweetCPU::start(IOService *provider)
 +#endif
 @@ -84,0 +93,3 @@ SweetCPU::start(IOService *provider)
@@ -21,7 +18,6 @@ index 7ea8b78..720616b 100644
 @@ -85,0 +97 @@ SweetCPU::start(IOService *provider)
 +#endif
 diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
-index 92f3e26..fe3c011 100644
 --- a/iokit/KernelConfigTables.cpp
 +++ b/iokit/KernelConfigTables.cpp
 @@ -84,0 +85,14 @@ const char * gIOKernelConfigTables =

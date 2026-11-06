@@ -55,6 +55,11 @@ jobs:
           git -C dxb checkout -q FETCH_HEAD
           # 12.5-14.3 use the top-level patches dir; ours go next to blacktop's
           cp xnu/patches/*.patch xnu/patches/*.sh dxb/patches/
+          # Vayu patches use zero-context hunks generated from the exact post-0081 tree.
+          sed -i '' 's|git apply --check |git apply --unidiff-zero --check |' dxb/build.sh
+          sed -i '' 's|git apply "\$PATCH"|git apply --unidiff-zero "\$PATCH"|' dxb/build.sh
+          grep -q 'git apply --unidiff-zero --check' dxb/build.sh
+          grep -q 'git apply --unidiff-zero "\$PATCH"' dxb/build.sh
           # libfirehose_kernel is built arm64e-only; the SWEET kernel is plain arm64
           sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' dxb/build.sh
           grep -c 'VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh
