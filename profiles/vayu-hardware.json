@@ -222,6 +222,16 @@
       "size": "0x80000000"
     }
   ],
+  "psci": [
+    {
+      "compatible": [
+        "arm,psci-1.0"
+      ],
+      "method": [
+        "smc"
+      ]
+    }
+  ],
   "reserved_memory": [
     {
       "no_map": true,
@@ -447,6 +457,9 @@
   "schema_version": 1,
   "timer": [
     {
+      "clock_frequency_hz": [
+        "0x124f800"
+      ],
       "compatible": [
         "arm,armv8-timer"
       ],

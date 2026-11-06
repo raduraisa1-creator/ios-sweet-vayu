@@ -20,7 +20,7 @@ def make_dtb():
         "#address-cells", "#size-cells", "model", "compatible", "qcom,msm-name",
         "qcom,msm-id", "device_type", "reg", "enable-method", "capacity-dmips-mhz",
         "no-map", "interrupts", "reg-names", "bootargs", "androidboot.serialno",
-        "size", "alignment",
+        "size", "alignment", "method", "clock-frequency",
     ):
         name_offsets[name] = len(names)
         names.extend(name.encode() + b"\0")
@@ -44,6 +44,8 @@ def make_dtb():
     root += prop("compatible", b"qcom,sm8150-cdp\0qcom,sm8150\0")
     root += prop("qcom,msm-name", b"SM8150 V2\0")
     root += prop("qcom,msm-id", cells(0x153, 0x20000))
+    root += begin("psci") + prop("compatible", b"arm,psci-1.0\0")
+    root += prop("method", b"smc\0") + end_node()
     root += begin("chosen") + prop("bootargs", b"androidboot.serialno=fixture\0")
     root += prop("androidboot.serialno", b"fixture\0")
     root += begin("ufshc@1d84000") + prop("compatible", b"qcom,ufshc\0")
@@ -57,6 +59,9 @@ def make_dtb():
 
     root += begin("memory") + prop("device_type", b"memory\0")
     root += prop("reg", cells(0, 0x80000000, 0, 0x10000000)) + end_node()
+    root += begin("timer") + prop("compatible", b"arm,armv8-timer\0")
+    root += prop("clock-frequency", cells(0x124f800))
+    root += prop("interrupts", cells(1, 1, 0xf08)) + end_node()
     root += begin("reserved-memory")
     root += prop("#address-cells", cells(2)) + prop("#size-cells", cells(2))
     root += begin("hyp_mem@80000000") + prop("reg", cells(0, 0x80000000, 0, 0x1000))
@@ -91,10 +96,12 @@ class VayuFdtTests(unittest.TestCase):
         self.assertEqual(profile["cpus"][0]["enable_method"], ["psci"])
         self.assertEqual(profile["cpus"][0]["mpidr"], "0x0")
         self.assertEqual(profile["memory"][0]["base"], "0x80000000")
+        self.assertEqual(profile["psci"][0]["method"], ["smc"])
         self.assertTrue(profile["reserved_memory"][0]["no_map"])
         self.assertEqual(profile["fdt_reservations"][0]["base"], "0x90000000")
         self.assertEqual(profile["dynamic_reserved_memory"][0]["size_cells"], ["0x0", "0x2000"])
         self.assertEqual(profile["gic"][0]["ranges"][0]["base"], "0x17a00000")
+        self.assertEqual(profile["timer"][0]["clock_frequency_hz"], ["0x124f800"])
         self.assertEqual(profile["ufs"][0]["reg_names"], ["ufs_mem", "ufs_ice"])
         report = json.dumps(profile)
         self.assertNotIn("chosen", report)

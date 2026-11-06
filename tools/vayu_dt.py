@@ -191,6 +191,7 @@ def create_profile(root):
         "reserved_memory": [],
         "dynamic_reserved_memory": [],
         "fdt_reservations": root.reservations,
+        "psci": [],
         "gic": [],
         "timer": [],
         "ufs": [],
@@ -205,6 +206,11 @@ def create_profile(root):
             continue
         node_compatible = node.strings("compatible")
         device_type = node.strings("device_type")
+        if node.path == "/psci":
+            profile["psci"].append({
+                "compatible": node_compatible,
+                "method": node.strings("method"),
+            })
         if node.parent and node.parent.name == "cpus" and device_type == ["cpu"]:
             mpidr = decode_reg(node)
             if len(mpidr) != 1:
@@ -237,6 +243,9 @@ def create_profile(root):
             profile["timer"].append({
                 "path": node.path,
                 "compatible": node_compatible,
+                "clock_frequency_hz": [
+                    f"0x{x:x}" for x in node.cells("clock-frequency")
+                ],
                 "interrupts": [f"0x{x:x}" for x in node.cells("interrupts")],
             })
         if "qcom,ufshc" in node_compatible:
@@ -247,8 +256,11 @@ def create_profile(root):
                 "interrupts": [f"0x{x:x}" for x in node.cells("interrupts")],
             })
 
-    if not profile["cpus"] or not profile["memory"] or not profile["gic"] or not profile["ufs"]:
-        raise ValueError("FDT is missing one or more required CPU, memory, GIC, or UFS nodes")
+    if (not profile["cpus"] or not profile["memory"] or not profile["gic"]
+            or not profile["timer"] or not profile["psci"] or not profile["ufs"]):
+        raise ValueError(
+            "FDT is missing one or more required CPU, memory, PSCI, GIC, timer, or UFS nodes"
+        )
     return profile
 
 

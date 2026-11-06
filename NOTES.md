@@ -16,12 +16,26 @@
 - The `reserved-memory` node contains 22 children with fixed `reg` ranges (20 marked `no-map`) and eight dynamic size/alignment entries. The FDT header reserve map contains no additional entries. GICv3 is at `0x17a00000/0x10000` and redistributor region `0x17a60000/0x100000`. The generic ARMv8 timer's raw interrupt specifiers are recorded in the profile without interpreting them.
 - UFS host compatible is `qcom,ufshc`; `ufs_mem` is `0x1d84000/0x2500`, `ufs_ice` is `0x1d90000/0x8000`, interrupt specifier `<0x0 0x109 0x0>`. Thus the prior UFS base was accurate but its size was not verified there. Device-tree panel candidates include EA8076 and other panels; active panel identity remains unverified.
 
+### Memory and firmware-map investigation (read-only)
+- `wsl.exe -e bash -lc "adb shell cat /proc/meminfo"` succeeded in TWRP. It reports `MemTotal: 5621920 kB`; this is the recovery kernel's current usable-memory total, not a Vayu/XNU allocation map.
+- `wsl.exe -e bash -lc "adb shell cat /proc/iomem"` succeeded. TWRP labels these as `System RAM`: `0x80000000-0x856fffff`, `0x85f40000-0x85ffffff`, `0x98f17000-0x98ffffff`, `0x9a500000-0x9e3fffff`, `0x9f800000-0xa4bfffff`, `0xa8800000-0xaeffffff`, `0xb0000000-0xbcbfffff`, and `0xc0000000-0x1ffffffff`. The high interval is contiguous at runtime, but the low intervals are fragmented and this resource listing does not establish that firmware-reserved or dynamically allocated pages are safe for XNU.
+- The sweet ADT's existing XNU placement (`0xb0000000`, size `0x4d000000`) is not reusable: its start overlaps Vayu's fixed `ramoops@b0000000` reservation (`0x800000` bytes), and the purported contiguous span crosses Vayu's DT memory gap `[0xbcc00000, 0xc0000000)`. Do not build an ADT by changing only the board name or copying sweet's memory size.
+- There are eight dynamic reserved-memory entries whose FDT nodes provide size/alignment but no assigned `reg` addresses. Their runtime placements and ownership are unresolved. The live runtime map also does not by itself resolve their locations. No safe XNU payload base or memory-size value has been selected.
+- `/psci` reports `arm,psci-1.0` with `method = "smc"`. The ARMv8 timer reports `clock-frequency = 0x124f800` (19.2 MHz) and four raw interrupt specifiers. The profile now records PSCI conduit and timer frequency, but timer PPI numbering/group routing and compatibility with XNU's GIC path are not verified for Vayu.
+- Framebuffer handoff is not established: `/proc/fb` returned no entries and `/sys/class/graphics` listed no graphics devices in TWRP. `/chosen` contains no framebuffer-named property; the FDT's `cont_splash_region` reservation is `0x9c000000/0x2400000` (36 MiB), which does not establish active scanout, format, stride, or panel. Do not treat the sweet framebuffer settings as confirmed Vayu facts.
+- A read-only pipeline attempt to grep selected `/proc/iomem` labels failed because the pattern was interpreted by the remote shell; it was replaced with the successful full `cat /proc/iomem` read. This did not modify the device.
+
 ### Implemented Vayu-specific tooling
 - Implementation commit: `70104f4` (`feat(vayu): inventory live hardware device tree`).
 - Added `tools/vayu_dt.py`, a dependency-free FDT parser/inventory tool. It rejects non-Vayu/non-SM8150 trees and produces a sanitized profile containing only board model/compatible/MSM ID, CPU, memory, reserved-memory, GIC, timer and UFS facts. It excludes `/chosen` to avoid bootargs, serials, seeds, and other per-device values.
 - Added `tests/test_vayu_dt.py` (three unit tests: profile extraction, wrong-target rejection, malformed-header rejection; sanitizer test puts synthetic serial and UFS data under `/chosen` and confirms neither leaks into output).
 - Generated committed summary `profiles/vayu-hardware.json` from the local FDT. It is not a raw device dump or a bootable configuration. Existing XNU workflow/mkadt remain SWEET-only; kernel config/ADT changes must wait until board resources and SoC integration are developed.
 - README documents the Vayu snapshot and regeneration command. Safety warning remains: do not use the SWEET userdata-flash steps on Vayu.
+
+### Follow-up implementation and exact verification
+- Updated `tools/vayu_dt.py` and its fixture to include PSCI compatible/conduit and ARMv8 timer clock frequency in the sanitized profile. Regenerated `profiles/vayu-hardware.json` from ignored `dtb/live/vayu-live.dtb`; it still excludes `/chosen`.
+- `python -m unittest discover -s tests -v`: passed, 3 tests, including the new PSCI and timer-field assertions.
+- No kernel build, GitHub Actions run, boot image, device boot, or device write was attempted. The current blocker remains unresolved memory ownership/allocation and Vayu-specific XNU ADT/GIC/display integration.
 
 ### Exact validation and status
 - `wsl.exe -e bash -lc 'adb devices -l && adb shell getprop ...'`: success; TWRP Vayu observed; read-only only.
@@ -35,10 +49,11 @@
 - `git diff --check`: passed. No XNU/kernel build or CI run was attempted; no boot image was prepared or booted.
 
 ### Next concrete actions
-1. Reconcile Vayu's three memory ranges, firmware carveouts, and XNU addressability; inspect PSCI conduit, timer mapping, GIC security/interrupt behavior and framebuffer handoff before selecting kernel memory.
-2. Research Vayu-specific upstream Linux sources/DT overlays for board peripherals and the active DSI panel. Do not select among DT panel candidates based only on package markings.
-3. Design a separate `VAYU` machine config and ADT generator path; avoid enabling VAYU in the build workflow until all sweet-only patch guards/staging scripts are audited and the board config compiles.
-4. Build and verify a kernel/image before considering temporary `fastboot boot`; no partition writes. Fresh explicit confirmation is required before any device-storage write on this POCO X3 Pro.
+1. Determine the runtime addresses and ownership of dynamic reservations and reconcile them with the fragmented `/proc/iomem` intervals before proposing any XNU placement.
+2. Resolve Vayu timer PPI/GIC routing and a usable framebuffer handoff; the current recovery framebuffer interface is empty and the splash reservation alone is insufficient.
+3. Research Vayu-specific upstream Linux sources/DT overlays for board peripherals and the active DSI panel. Do not select among DT panel candidates based only on package markings.
+4. Design a separate `VAYU` machine config and ADT generator path; avoid enabling VAYU in the build workflow until all sweet-only patch guards/staging scripts are audited and the board config compiles.
+5. Build and verify a kernel/image before considering temporary `fastboot boot`; no partition writes. Fresh explicit confirmation is required before any device-storage write on this POCO X3 Pro.
 
 ## Historical ios-sweet work log (Redmi Note 10 Pro, SM7150)
 
