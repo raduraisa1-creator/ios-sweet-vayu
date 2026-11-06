@@ -59,11 +59,10 @@
 - `git diff --check`: passed. No XNU/kernel build or CI run was attempted; no boot image was prepared or booted.
 
 ### Next concrete actions
-1. Reconcile TWRP's observed dynamic CMA ranges with Vayu's FDT reservations and `/proc/iomem`; then determine what memory map ABL actually hands to a temporary kernel before proposing any XNU placement.
-2. Resolve Vayu timer PPI/GIC routing and a usable framebuffer handoff; the current recovery framebuffer interface is empty and the splash reservation alone is insufficient.
-3. Research Vayu-specific upstream Linux sources/DT overlays for board peripherals and the active DSI panel. Do not select among DT panel candidates based only on package markings.
-4. Design a separate `VAYU` machine config and ADT generator path; avoid enabling VAYU in the build workflow until all sweet-only patch guards/staging scripts are audited and the board config compiles.
-5. Build and verify a kernel/image before considering temporary `fastboot boot`; no partition writes. Fresh explicit confirmation is required before any device-storage write on this POCO X3 Pro.
+1. Audit XNU's `dram-base`/`dram-size` handling and the SWEET `--highmem` path against the 4 GiB-aligned Vayu candidate; the TWRP map is not proof of ABL-time ownership.
+2. Audit SWEET platform-expert matching, GIC/timer routing, UFS and display assumptions, then implement a separate VAYU ADT/build path without changing SWEET defaults.
+3. Use Vayu-specific upstream Linux sources/DT overlays to confirm the active DSI panel and framebuffer handoff; do not choose from DT candidates based on package markings.
+4. Build and verify the Vayu kernel/image before considering a temporary `fastboot boot`; no partition writes. Any device-storage write still requires fresh explicit confirmation for this POCO X3 Pro.
 
 ## Historical ios-sweet work log (Redmi Note 10 Pro, SM7150)
 
