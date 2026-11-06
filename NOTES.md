@@ -33,6 +33,7 @@
 - README documents the Vayu snapshot and regeneration command. Safety warning remains: do not use the SWEET userdata-flash steps on Vayu.
 
 ### Follow-up implementation and exact verification
+- Implementation commit: `2ca0107` (`feat(vayu): capture PSCI and timer constraints`); this handoff update records the verified results and remaining blockers.
 - Updated `tools/vayu_dt.py` and its fixture to include PSCI compatible/conduit and ARMv8 timer clock frequency in the sanitized profile. Regenerated `profiles/vayu-hardware.json` from ignored `dtb/live/vayu-live.dtb`; it still excludes `/chosen`.
 - `python -m unittest discover -s tests -v`: passed, 3 tests, including the new PSCI and timer-field assertions.
 - No kernel build, GitHub Actions run, boot image, device boot, or device write was attempted. The current blocker remains unresolved memory ownership/allocation and Vayu-specific XNU ADT/GIC/display integration.
