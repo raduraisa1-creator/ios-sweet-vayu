@@ -3,6 +3,7 @@
 ## Active Vayu handoff (2026-11-06)
 
 ### VAYU prototype milestone (2026-11-06; local validation only)
+- Implementation commit: `013e65e` (`feat(vayu): add experimental XNU and ADT prototype`).
 - Added XNU patches `0082-vayu-machine-config.patch` and `0083-vayu-platform-and-cpu-match.patch`. They add `MACHINE_CONFIG=VAYU`, keep the existing SWEET arm64v8.2 low-level definitions as an explicitly provisional bootstrap, and add Vayu identity/CPU matches. Patch-format validation passes; they have **not** been applied to a full XNU source tree or built.
 - Added `tools/mkvayuadt.py` and `tests/test_mkvayuadt.py`. The generator requires `--experimental-highmem`, checks that the sanitized hardware profile matches Vayu's CPU/PSCI, GIC, timer, framebuffer reservation, UFS range, and contiguous FDT RAM, and checks the candidate against the TWRP-only memory report. It outputs an experimental ADT derived from the SWEET template; it does not establish a safe boot map or implement Vayu peripheral drivers.
 - Verification: `python -m unittest discover -s tests -v` passed all 11 tests; `python -m compileall -q tools tests` passed; `python tools/validate-repo.py` passed with UTF-8 output (83 contiguous patches and 18 Python tools); `git diff --check` passed. The gated generator wrote an 8,448-byte ADT to a temporary path; `tools.adt.parse` parsed it as a `device-tree` root with eight children. It printed the expected warning that the optional local D22AP product ADT is absent, so the generated ADT has no `/product` node.
