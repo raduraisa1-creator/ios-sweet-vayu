@@ -16,6 +16,7 @@
 ### Work performed in this session
 - Renamed the worktree branch to `raduraisa1-creator-vayu-ios16-port`.
 - Updated `README.md` to identify the Vayu effort as unsupported/in progress and warn that the existing `sweet` userdata-flash instructions must not be used on Vayu.
+- First documentation milestone commit: `cbcede5` (`docs: mark Vayu port as unsupported pending hardware discovery`).
 - On resuming, PowerShell is available and confirmed HEAD `269ef30` on `raduraisa1-creator-vayu-ios16-port`; the only pending changes were `README.md` and this handoff. No Vayu-specific sources, DT artifacts, or generated images are present in this worktree.
 - `adb` is not on PATH and was not found in the checked common Android SDK locations (`%LOCALAPPDATA%\Android\Sdk\platform-tools`, `C:\Android\platform-tools`, `C:\platform-tools`), so the attached phone could not be independently inspected. This is a host-tooling blocker, not evidence that the phone is disconnected.
 - The previous attempt's PowerShell and web-fetch calls were denied by the runtime. No device read/write, build, CI run, or boot was attempted in either attempt. The HackiOSX page was not independently fetched; its chipset distinction here is from the supplied project context.
