@@ -14,13 +14,22 @@ The target is the POCO X3 Pro (`vayu`, model M2102J20SG), based on Qualcomm SM81
 `xnu/patches/`, `tools/mkadt.py`, and `shim/` are the proven Redmi Note 10 Pro port; their `SWEET`
 machine configuration and board-specific addresses/drivers must not be assumed to work on Vayu.
 
-The next porting milestone is to bring the Vayu live device tree into this worktree as an ignored,
-local artifact, verify its memory and reserved-memory map, interrupt controller, timer, UFS and
-display resources, then introduce a separate Vayu board profile before attempting an XNU build.
-The prior bring-up transcript reports two RAM banks, 22 reserved regions and UFS at `0x01d84000`;
-these are transcript-derived leads, not independently verified in this checkout. The Samsung
-EA8076 1080×2400 panel identification is also provisional. No partition, boot, recovery, modem,
-persist or backup data has been written by this porting work.
+The first read-only hardware discovery now confirms the live tree's board model `VAYU`, SoC
+`SM8150 V2`, and compatible strings `qcom,sm8150-cdp` / `qcom,sm8150`. Its memory node has three
+ranges; it describes eight PSCI-enabled CPUs, 22 fixed and eight dynamic reserved-memory entries,
+GICv3, a generic ARMv8 timer, and UFS at `0x01d84000` (plus its ICE range at `0x01d90000`). A
+sanitized snapshot is in
+[`profiles/vayu-hardware.json`](profiles/vayu-hardware.json). The raw live FDT remains local and
+ignored. Recreate a profile with:
+
+```sh
+python tools/vayu_dt.py dtb/live/vayu-live.dtb --output profiles/vayu-hardware.json
+```
+
+The tool omits `/chosen` (including bootargs and per-device identifiers). The existing kernel build
+and `mkadt.py` are still SWEET-only; this inventory is not a Vayu boot profile or bootable image.
+The DT contains several panel candidates, so the exact active panel is not considered verified.
+No partition, boot, recovery, modem, persist or backup data has been written by this porting work.
 
 The user-provided [HackiOSX porting guide](https://hackiosx.dev/porting.html) is a sequencing
 reference, not a compatible device configuration: its Snapdragon 778G (SM7325) target differs
@@ -179,6 +188,7 @@ The log contains crash reports with backtraces (`CRASH name ...`), IOKit traces 
 | `tools/sweet-root-tweaks.py` | Bring-up changes to the root (Setup skip, activation, daemons) |
 | `tools/sweet-log-pull.sh`, `sweet-log.py` | Read the persistent kernel log from recovery |
 | `tools/sweet-crash.py` | Symbolicate console crash reports |
+| `tools/vayu_dt.py` | Extract a sanitized hardware inventory from a local Vayu FDT |
 | `tools/xnu-cc.py` | Local single-file compile check from a CI log |
 | `tools/qemu-sweet.py` | QEMU test boots with framebuffer text decoding |
 | `tools/adt.py`, `remotezip.py`, `unpack_bootv2.py`, `sparsediff.py` | Helpers |

@@ -3,30 +3,41 @@
 ## Active Vayu handoff (2026-11-06)
 
 ### Confirmed repository state
-- This worktree is based on `origin/main` at merge base `269ef30875b8eaf0280e80e2b3fbad3e6fe8b004`; the active branch is `raduraisa1-creator-vayu-ios16-port`.
-- The checked-in implementation is for Redmi Note 10 Pro (`sweet`, SM7150): the XNU workflow defaults to `MACHINE_CONFIG=SWEET`, `tools/mkadt.py` hardcodes the SM7150/`xiaomi,sweet` identity and sweet MMIO, and all 81 existing XNU patches are sweet-specific.
-- No Vayu source, live device tree, build artifact, or Vayu patch exists in this worktree. The ignored/local `dtb/live/vayu-live.dts` mentioned in the supplied prior-session context is not present here.
+- This worktree is based on `origin/main` at merge base `269ef30875b8eaf0280e80e2b3fbad3e6fe8b004`; active branch: `raduraisa1-creator-vayu-ios16-port`.
+- The existing XNU implementation is for Redmi Note 10 Pro (`sweet`, SM7150): the workflow defaults to `MACHINE_CONFIG=SWEET`, `tools/mkadt.py` hardcodes the SM7150/`xiaomi,sweet` identity and sweet MMIO, and existing board-specific patches are SWEET-scoped. The sweet kernel is not a Vayu build.
+- Local branch review found no prior Vayu implementation in repository history. Two earlier commits on this branch (`cbcede5`, `52eca17`) add the unsupported-device warning and initial handoff.
 
-### Vayu evidence and confidence
-- The supplied prior-session transcript identifies the target as POCO X3 Pro (`vayu`, M2102J20SG), Qualcomm SM8150 v2, and says the phone was in TWRP with ADB access. That is historical transcript evidence; this session has not independently queried the connected phone.
-- The transcript says a local live-DT checker parsed two memory banks, 22 reserved regions, and UFS at `0x01d84000`. Its raw DT and checker output are not in this checkout, so these values remain leads until the local DT is re-collected and validated here.
-- The transcript reports root compatible strings `qcom,sm8150-cdp` / `qcom,sm8150` and a Samsung EA8076 1080×2400 panel identification. The panel identification is provisional; no Vayu display, input, or UFS driver behavior has been verified.
-- The upstream `ios-sweet` XNU CI run mentioned in the transcript is a successful sweet build, not a Vayu build. No Vayu kernel has been built or booted.
+### Confirmed live Vayu hardware (read-only, 2026-11-06)
+- WSL ADB found one device in TWRP recovery (`product=twrp_vayu`, model `M2102J20SG`, device `vayu`). Read-only properties returned `ro.product.device=vayu`, `ro.product.model=M2102J20SG`, `ro.board.platform=msmnile`. No partition or bootloader state was changed.
+- Pulled `/sys/firmware/fdt` to ignored local `dtb/live/vayu-live.dtb` (723,852 bytes). `dtc 1.7.2` decompiled it to ignored `dtb/live/vayu-live.dts`; it emitted 271 nonfatal warnings, mainly `unit_address_vs_reg` (178) and `graph_port` (60), with a small number of vendor-DT cell-format warnings. No fatal parse error occurred; the original blobs and DTC diagnostics remain local and uncommitted. No dump checksum is recorded in git.
+- The FDT root reports model `VAYU`, compatibles `qcom,sm8150-cdp`, `qcom,sm8150`, `qcom,cdp`, `qcom,msm-name = "SM8150 V2"`, and `qcom,msm-id = <0x153 0x20000>`. This confirms the SoC distinction from sweet/SM7150 and from the HackiOSX guide's SM7325 target.
+- The memory node has three ranges: `<0x80000000 0x3cc00000>`, `<0x140000000 0xc0000000>`, and `<0xc0000000 0x80000000>` (the DT's listed order is retained in the JSON report). The transcript's earlier two-range summary was incomplete.
+- The tree lists eight CPU nodes, all with `enable-method = "psci"`; their `capacity-dmips-mhz` values split into four `0x400` and four `0x6cc`. No CPU microarchitecture is inferred by the new tool.
+- The `reserved-memory` node contains 22 children with fixed `reg` ranges (20 marked `no-map`) and eight dynamic size/alignment entries. The FDT header reserve map contains no additional entries. GICv3 is at `0x17a00000/0x10000` and redistributor region `0x17a60000/0x100000`. The generic ARMv8 timer's raw interrupt specifiers are recorded in the profile without interpreting them.
+- UFS host compatible is `qcom,ufshc`; `ufs_mem` is `0x1d84000/0x2500`, `ufs_ice` is `0x1d90000/0x8000`, interrupt specifier `<0x0 0x109 0x0>`. Thus the prior UFS base was accurate but its size was not verified there. Device-tree panel candidates include EA8076 and other panels; active panel identity remains unverified.
 
-### Work performed in this session
-- Renamed the worktree branch to `raduraisa1-creator-vayu-ios16-port`.
-- Updated `README.md` to identify the Vayu effort as unsupported/in progress and warn that the existing `sweet` userdata-flash instructions must not be used on Vayu.
-- First documentation milestone commit: `cbcede5` (`docs: mark Vayu port as unsupported pending hardware discovery`).
-- On resuming, PowerShell is available and confirmed HEAD `269ef30` on `raduraisa1-creator-vayu-ios16-port`; the only pending changes were `README.md` and this handoff. No Vayu-specific sources, DT artifacts, or generated images are present in this worktree.
-- `adb` is not on PATH and was not found in the checked common Android SDK locations (`%LOCALAPPDATA%\Android\Sdk\platform-tools`, `C:\Android\platform-tools`, `C:\platform-tools`), so the attached phone could not be independently inspected. This is a host-tooling blocker, not evidence that the phone is disconnected.
-- The previous attempt's PowerShell and web-fetch calls were denied by the runtime. No device read/write, build, CI run, or boot was attempted in either attempt. The HackiOSX page was not independently fetched; its chipset distinction here is from the supplied project context.
-- Validation completed for this documentation milestone: `python -m compileall -q tools` passed; `git diff --check` passed. These checks do not validate or build a Vayu kernel.
+### Implemented Vayu-specific tooling
+- Added `tools/vayu_dt.py`, a dependency-free FDT parser/inventory tool. It rejects non-Vayu/non-SM8150 trees and produces a sanitized profile containing only board model/compatible/MSM ID, CPU, memory, reserved-memory, GIC, timer and UFS facts. It excludes `/chosen` to avoid bootargs, serials, seeds, and other per-device values.
+- Added `tests/test_vayu_dt.py` (three unit tests: profile extraction, wrong-target rejection, malformed-header rejection; sanitizer test puts synthetic serial and UFS data under `/chosen` and confirms neither leaks into output).
+- Generated committed summary `profiles/vayu-hardware.json` from the local FDT. It is not a raw device dump or a bootable configuration. Existing XNU workflow/mkadt remain SWEET-only; kernel config/ADT changes must wait until board resources and SoC integration are developed.
+- README documents the Vayu snapshot and regeneration command. Safety warning remains: do not use the SWEET userdata-flash steps on Vayu.
+
+### Exact validation and status
+- `wsl.exe -e bash -lc 'adb devices -l && adb shell getprop ...'`: success; TWRP Vayu observed; read-only only.
+- `adb exec-out cat /sys/firmware/fdt`: success; local ignored FDT recovered.
+- `dtc -I dtb -O dts`: completed successfully with the 271 nonfatal warnings described above; it decompiled the blob for independent inspection. The tool extraction reports eight CPUs, three memory ranges, 22 fixed reserved ranges, GICv3 and UFS registers.
+- `python -m unittest discover -s tests -v`: passed, 3 tests.
+- `python -m compileall -q tools tests`: passed.
+- `python tools\vayu_dt.py dtb\live\vayu-live.dtb --output profiles\vayu-hardware.json`: passed.
+- Live-profile assertions passed: 8 CPUs, 3 memory ranges, 22 fixed plus 8 dynamic reservations, 20 fixed `no-map` entries, GICv3 and both UFS regions; sanitized output contains no `/chosen`, bootargs or serial-like fields.
+- `tools/validate-repo.py`: the patch-sequence and Python checks passed (81 contiguous patches, 16 tools); its shell check reported 7 syntax errors because the Windows worktree has CRLF on those tracked scripts while the git index is LF (`git ls-files --eol` confirmed this pre-existing state). All shell scripts pass `bash -n` when CRLF is normalized in the stream; no source files were changed to work around line endings.
+- `git diff --check`: passed. No XNU/kernel build or CI run was attempted; no boot image was prepared or booted.
 
 ### Next concrete actions
-1. Re-run read-only device discovery and retrieve the Vayu live DT into the ignored `dtb/` area; preserve the Android installation and all partition backups.
-2. Verify the transcript's memory/reservation and UFS facts against the actual DT, then inventory interrupt/timer, CPU topology, display, touch, key and storage hardware.
-3. Add a separate Vayu machine configuration/device-tree profile; do not extend or silently repurpose the sweet profile. Compile/test the smallest relevant kernel and shim changes before preparing any boot image.
-4. Only after a Vayu image is built and reviewed, consider a temporary `fastboot boot`. Do not flash or write device storage without fresh explicit confirmation for this exact POCO X3 Pro.
+1. Reconcile Vayu's three memory ranges, firmware carveouts, and XNU addressability; inspect PSCI conduit, timer mapping, GIC security/interrupt behavior and framebuffer handoff before selecting kernel memory.
+2. Research Vayu-specific upstream Linux sources/DT overlays for board peripherals and the active DSI panel. Do not select among DT panel candidates based only on package markings.
+3. Design a separate `VAYU` machine config and ADT generator path; avoid enabling VAYU in the build workflow until all sweet-only patch guards/staging scripts are audited and the board config compiles.
+4. Build and verify a kernel/image before considering temporary `fastboot boot`; no partition writes. Fresh explicit confirmation is required before any device-storage write on this POCO X3 Pro.
 
 ## Historical ios-sweet work log (Redmi Note 10 Pro, SM7150)
 
