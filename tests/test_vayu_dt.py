@@ -20,7 +20,7 @@ def make_dtb():
         "#address-cells", "#size-cells", "model", "compatible", "qcom,msm-name",
         "qcom,msm-id", "device_type", "reg", "enable-method", "capacity-dmips-mhz",
         "no-map", "interrupts", "reg-names", "bootargs", "androidboot.serialno",
-        "size", "alignment", "method", "clock-frequency",
+        "size", "alignment", "method", "clock-frequency", "phandle", "cpu",
     ):
         name_offsets[name] = len(names)
         names.extend(name.encode() + b"\0")
@@ -55,7 +55,11 @@ def make_dtb():
     root += prop("#address-cells", cells(2)) + prop("#size-cells", cells(0))
     root += begin("cpu@0") + prop("device_type", b"cpu\0")
     root += prop("reg", cells(0, 0)) + prop("enable-method", b"psci\0")
-    root += prop("capacity-dmips-mhz", cells(0x400)) + end_node() + end_node()
+    root += prop("capacity-dmips-mhz", cells(0x400))
+    root += prop("phandle", cells(0x13)) + end_node()
+    root += begin("cpu-map") + begin("cluster0") + begin("core0")
+    root += prop("cpu", cells(0x13)) + end_node() + end_node() + end_node()
+    root += end_node()
 
     root += begin("memory") + prop("device_type", b"memory\0")
     root += prop("reg", cells(0, 0x80000000, 0, 0x10000000)) + end_node()
@@ -95,6 +99,9 @@ class VayuFdtTests(unittest.TestCase):
         self.assertEqual(profile["device_tree"]["msm_id"], ["0x153", "0x20000"])
         self.assertEqual(profile["cpus"][0]["enable_method"], ["psci"])
         self.assertEqual(profile["cpus"][0]["mpidr"], "0x0")
+        self.assertEqual(profile["cpus"][0]["cluster_id"], 0)
+        self.assertEqual(profile["cpus"][0]["cluster_core_id"], 0)
+        self.assertEqual(profile["cpu_topology"][0]["cpu_paths"], ["/cpus/cpu@0"])
         self.assertEqual(profile["memory"][0]["base"], "0x80000000")
         self.assertEqual(profile["psci"][0]["method"], ["smc"])
         self.assertTrue(profile["reserved_memory"][0]["no_map"])

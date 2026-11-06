@@ -2,6 +2,15 @@
 
 ## Active Vayu handoff (2026-11-06)
 
+### Latest Vayu source milestone (2026-11-06; kernel build still pending)
+- The requested POCO X3 Pro does **not** have an iOS kernel or boot image from this work yet. The earlier workflow run `42261123544` is `failure` / `cancelled`; GitHub reports the build job had zero steps and therefore produced no kernel artifact. No device boot or write has occurred.
+- Updated the offline FDT profile to extract `/cpus/cpu-map` phandle references, recording three observed clusters (4/3/1 CPUs) and each CPU's cluster/core index. The ADT prototype writes those properties, validates the topology, and has corresponding tests.
+- Added Vayu machine configuration / identity / CPU-match / explicit topology patches `0082`–`0085`. Updated the shared pinned libpthread and HFS staging scripts to run for `MACHINE_CONFIG=VAYU` as well as SWEET.
+- Exact source check: XNU `xnu-8796.141.3`, commit `1b191cb58250d0705d8a51287127505aa4bc0789`; existing patches through `0081` were applied after the pinned staging scripts supplied the required sources. New patches `0082`–`0085` then each passed `git apply --check` and applied in order to an isolated post-`0081` source copy. This verifies patch applicability only, not compilation or boot.
+- `python -m unittest discover -s tests -v`: passed all 11 tests. `python -m compileall -q tools tests`: passed. `PYTHONIOENCODING=utf-8 python tools/validate-repo.py`: passed (85 contiguous patches, 18 Python tools, 7 shell scripts). `git diff --check`: passed.
+- Generated local ignored artifact `dtb/live/vayu-experimental-check.adt`: 8,448 bytes; `tools.adt.parse` accepted its `device-tree` root and eight children, and the CPU cluster IDs are `[0,0,0,0,1,1,1,2]`. Generator warned that the optional D22AP product ADT is absent, so this output has no `/product` node. It is not a boot image or safe-to-boot ADT.
+- **Still blocked from installation:** no Vayu kernel has been compiled; no Vayu iOS root filesystem, payload, or shim boot image has been built. ABL-time memory ownership, bootloader handoff, timer/GIC behavior, active panel/framebuffer, and Vayu-specific storage/display/input support are unverified. Do not boot or write to the phone. After a successful VAYU kernel build, separately validate image packaging and the boot plan before asking for permission to try a temporary `fastboot boot`.
+
 ### VAYU prototype milestone (2026-11-06; local validation and CI pending)
 - Implementation commit: `013e65e` (`feat(vayu): add experimental XNU and ADT prototype`).
 - Added XNU patches `0082-vayu-machine-config.patch` and `0083-vayu-platform-and-cpu-match.patch`. They add `MACHINE_CONFIG=VAYU`, keep the existing SWEET arm64v8.2 low-level definitions as an explicitly provisional bootstrap, and add Vayu identity/CPU matches. Patch-format validation passes; they have **not** been applied to a full XNU source tree or built.

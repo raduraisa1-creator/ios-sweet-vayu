@@ -53,6 +53,14 @@ class VayuAdtTests(unittest.TestCase):
             cpu_props = {name: value for name, _, value in cpu.props}
             self.assertEqual(cpu_props["compatible"], b"arm,armv8\0")
             self.assertNotIn("clock-frequency", cpu_props)
+            self.assertIn("cluster-id", cpu_props)
+            self.assertIn("cluster-core-id", cpu_props)
+            self.assertIn("cluster-type", cpu_props)
+        cpu_clusters = [
+            struct.unpack("<I", next(v for n, _, v in cpu.props if n == "cluster-id"))[0]
+            for cpu in cpus.children
+        ]
+        self.assertEqual(cpu_clusters, [0, 0, 0, 0, 1, 1, 1, 2])
 
         fbcon = next(child for child in parsed.children if child.name == "sweet-fbcon")
         self.assertEqual(

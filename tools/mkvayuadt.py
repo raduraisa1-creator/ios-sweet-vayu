@@ -66,6 +66,24 @@ def validate_hardware_profile(profile):
     cpus = profile.get("cpus", [])
     if len(cpus) != 8 or any(cpu.get("enable_method") != ["psci"] for cpu in cpus):
         raise ValueError("hardware profile does not confirm eight PSCI-enabled CPUs")
+    topology = profile.get("cpu_topology", [])
+    if [item.get("cluster_id") for item in topology] != [0, 1, 2]:
+        raise ValueError("hardware profile does not confirm Vayu's three CPU-map clusters")
+    if [len(item.get("cpu_paths", [])) for item in topology] != [4, 3, 1]:
+        raise ValueError("hardware profile CPU-map cluster sizes do not match Vayu")
+    cpu_paths = [cpu.get("path") for cpu in cpus]
+    topology_paths = [
+        path for cluster in topology for path in cluster.get("cpu_paths", [])
+    ]
+    if sorted(cpu_paths) != sorted(topology_paths) or len(set(topology_paths)) != 8:
+        raise ValueError("hardware profile CPU map does not uniquely cover all CPUs")
+    capacities = {
+        capacity
+        for cpu in cpus
+        for capacity in cpu.get("capacity_dmips_mhz", [])
+    }
+    if capacities != {"0x400", "0x6cc"}:
+        raise ValueError("hardware profile CPU capacity classes do not match Vayu")
     if not any(
         "arm,psci-1.0" in item.get("compatible", [])
         and item.get("method") == ["smc"]
@@ -151,8 +169,33 @@ def create_vayu_adt(profile, runtime):
     cpus = find_node(root, "cpus")
     if cpus is None or len(cpus.children) != 8:
         raise ValueError("base ADT does not contain the expected eight CPU nodes")
-    for cpu in cpus.children:
-        set_property(cpu, "compatible", b"arm,armv8\0")
+    if len(profile["cpus"]) != len(cpus.children):
+        raise ValueError("base ADT CPU count does not match the Vayu hardware profile")
+    for cpu_node, cpu_profile in zip(cpus.children, profile["cpus"]):
+        mpidr = struct.unpack(
+            "<I",
+            next(value for name, _, value in cpu_node.props if name == "reg"),
+        )[0]
+        if mpidr != int(cpu_profile["mpidr"], 0):
+            raise ValueError("base ADT CPU order does not match the Vayu hardware profile")
+        set_property(cpu_node, "compatible", b"arm,armv8\0")
+        set_property(cpu_node, "cluster-id", struct.pack("<I", cpu_profile["cluster_id"]))
+        set_property(
+            cpu_node,
+            "die-cluster-id",
+            struct.pack("<I", cpu_profile["cluster_id"]),
+        )
+        set_property(
+            cpu_node,
+            "cluster-core-id",
+            struct.pack("<I", cpu_profile["cluster_core_id"]),
+        )
+        capacity = cpu_profile["capacity_dmips_mhz"][0]
+        set_property(
+            cpu_node,
+            "cluster-type",
+            struct.pack("<I", ord("E") if capacity == "0x400" else ord("P")),
+        )
         for frequency in (
             "clock-frequency",
             "bus-frequency",
@@ -160,7 +203,7 @@ def create_vayu_adt(profile, runtime):
             "peripheral-frequency",
             "fixed-frequency",
         ):
-            remove_property(cpu, frequency)
+            remove_property(cpu_node, frequency)
 
     fbcon = find_node(root, "sweet-fbcon")
     ufs = find_node(root, "sweet-ufs")

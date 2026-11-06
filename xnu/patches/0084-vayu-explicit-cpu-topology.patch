@@ -1,0 +1,18 @@
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+index a1f2a91..5853e40 100644
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -1046,3 +1046,2 @@ ml_parse_cpu_topology(void)
+-		 * Since we want to keep a linear cluster ID space, we cannot just rely
+-		 * on the value provided by EDT. Instead, use the MPIDR value to see if we have
+-		 * seen this exact cluster before. If so, then reuse that cluster ID for this CPU.
++		 * Vayu uses the CPU-map cluster IDs; other boards derive these from
++		 * MPIDR or cluster type.
+@@ -1049,0 +1049,5 @@ ml_parse_cpu_topology(void)
++#if defined(VAYU)
++		uint32_t phys_cluster_id = (uint32_t)ml_readprop(child, "cluster-id", ML_READPROP_MANDATORY);
++		assert(phys_cluster_id < MAX_CPU_CLUSTERS);
++		cpu->cluster_id = phys_cluster_id;
++#else
+@@ -1058,0 +1063 @@ ml_parse_cpu_topology(void)
++#endif

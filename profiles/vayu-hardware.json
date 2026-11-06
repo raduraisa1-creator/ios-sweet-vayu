@@ -1,9 +1,36 @@
 {
+  "cpu_topology": [
+    {
+      "cluster_id": 0,
+      "cpu_paths": [
+        "/cpus/cpu@0",
+        "/cpus/cpu@100",
+        "/cpus/cpu@200",
+        "/cpus/cpu@300"
+      ]
+    },
+    {
+      "cluster_id": 1,
+      "cpu_paths": [
+        "/cpus/cpu@400",
+        "/cpus/cpu@500",
+        "/cpus/cpu@600"
+      ]
+    },
+    {
+      "cluster_id": 2,
+      "cpu_paths": [
+        "/cpus/cpu@700"
+      ]
+    }
+  ],
   "cpus": [
     {
       "capacity_dmips_mhz": [
         "0x400"
       ],
+      "cluster_core_id": 0,
+      "cluster_id": 0,
       "enable_method": [
         "psci"
       ],
@@ -14,6 +41,8 @@
       "capacity_dmips_mhz": [
         "0x400"
       ],
+      "cluster_core_id": 1,
+      "cluster_id": 0,
       "enable_method": [
         "psci"
       ],
@@ -24,6 +53,8 @@
       "capacity_dmips_mhz": [
         "0x400"
       ],
+      "cluster_core_id": 2,
+      "cluster_id": 0,
       "enable_method": [
         "psci"
       ],
@@ -34,6 +65,8 @@
       "capacity_dmips_mhz": [
         "0x400"
       ],
+      "cluster_core_id": 3,
+      "cluster_id": 0,
       "enable_method": [
         "psci"
       ],
@@ -44,6 +77,8 @@
       "capacity_dmips_mhz": [
         "0x6cc"
       ],
+      "cluster_core_id": 0,
+      "cluster_id": 1,
       "enable_method": [
         "psci"
       ],
@@ -54,6 +89,8 @@
       "capacity_dmips_mhz": [
         "0x6cc"
       ],
+      "cluster_core_id": 1,
+      "cluster_id": 1,
       "enable_method": [
         "psci"
       ],
@@ -64,6 +101,8 @@
       "capacity_dmips_mhz": [
         "0x6cc"
       ],
+      "cluster_core_id": 2,
+      "cluster_id": 1,
       "enable_method": [
         "psci"
       ],
@@ -74,6 +113,8 @@
       "capacity_dmips_mhz": [
         "0x6cc"
       ],
+      "cluster_core_id": 0,
+      "cluster_id": 2,
       "enable_method": [
         "psci"
       ],

@@ -26,22 +26,23 @@ ignored. Recreate a profile with:
 python tools/vayu_dt.py dtb/live/vayu-live.dtb --output profiles/vayu-hardware.json
 ```
 
-The tool omits `/chosen` (including bootargs and per-device identifiers). Patches `0082`–`0083`
-introduce an unverified `MACHINE_CONFIG=VAYU` path, and `tools/mkvayuadt.py` creates an offline
-experimental ADT using the sanitized Vayu profile. Generate it only for inspection with an
-explicit opt-in:
+The tool omits `/chosen` (including bootargs and per-device identifiers). Patches `0082`–`0085`
+introduce an unverified `MACHINE_CONFIG=VAYU` path, including explicit CPU-map cluster IDs. The
+shared pinned libpthread and HFS source-staging steps now also run for VAYU builds.
+`tools/mkvayuadt.py` creates an offline experimental ADT using the sanitized Vayu profile.
+Generate it only for inspection with an explicit opt-in:
 
 ```sh
 python tools/mkvayuadt.py <local-output.adt> --experimental-highmem
 ```
 
-The generator checks the profile's board, CPU/PSCI, GIC, timer, framebuffer reservation, UFS range,
-and contiguous FDT RAM against the prototype ADT values. It also checks the recovery-observed
-memory candidate, but that is not proof of ABL-time ownership. Output is **not bootable**: the
-patches have not been built, the candidate memory map is unverified at handoff, and display/input
-and other Vayu drivers are not implemented. The DT contains several panel candidates, so the
-active panel is not verified. No partition, boot, recovery, modem, persist or backup data has been
-written by this porting work.
+The generator checks the profile's board, CPU/PSCI, three-cluster CPU map, GIC, timer, framebuffer
+reservation, UFS range, and contiguous FDT RAM against the prototype ADT values. It also checks
+the recovery-observed memory candidate, but that is not proof of ABL-time ownership. The generated
+8,448-byte ADT has been parsed locally, but it is **not bootable**: no Vayu kernel has been built,
+the candidate memory map is unverified at handoff, and display/input and other Vayu drivers are
+not implemented. The DT contains several panel candidates, so the active panel is not verified.
+No partition, boot, recovery, modem, persist or backup data has been written by this porting work.
 
 An offline memory-map report can subtract the fixed DT reservations and the dynamic CMA ranges
 observed in TWRP:

@@ -187,6 +187,7 @@ def create_profile(root):
             "msm_id": [f"0x{value:x}" for value in msm_id],
         },
         "cpus": [],
+        "cpu_topology": [],
         "memory": [],
         "reserved_memory": [],
         "dynamic_reserved_memory": [],
@@ -201,6 +202,7 @@ def create_profile(root):
     if "qcom,sm8150" not in compatible or not any("vayu" in item.lower() for item in board_names):
         raise ValueError("FDT is not identified as a Vayu / Qualcomm SM8150 tree")
 
+    cpu_nodes_by_phandle = {}
     for node in all_nodes(root):
         if node.path == "/chosen" or node.path.startswith("/chosen/"):
             continue
@@ -215,12 +217,17 @@ def create_profile(root):
             mpidr = decode_reg(node)
             if len(mpidr) != 1:
                 raise ValueError(f"{node.path}: expected exactly one CPU MPIDR in reg")
-            profile["cpus"].append({
+            phandle = node.cell("phandle", 0)
+            if not phandle or phandle in cpu_nodes_by_phandle:
+                raise ValueError(f"{node.path}: missing or duplicate CPU phandle")
+            cpu_record = {
                 "path": node.path,
                 "mpidr": mpidr[0]["base"],
                 "enable_method": node.strings("enable-method"),
                 "capacity_dmips_mhz": [f"0x{x:x}" for x in node.cells("capacity-dmips-mhz")],
-            })
+            }
+            cpu_nodes_by_phandle[phandle] = cpu_record
+            profile["cpus"].append(cpu_record)
         if device_type == ["memory"]:
             profile["memory"].extend({"path": node.path, **rng} for rng in decode_reg(node))
         if node.parent and node.parent.name == "reserved-memory":
@@ -255,6 +262,36 @@ def create_profile(root):
                 "reg_names": node.strings("reg-names"),
                 "interrupts": [f"0x{x:x}" for x in node.cells("interrupts")],
             })
+
+    cpu_map = next(
+        (node for node in all_nodes(root) if node.path == "/cpus/cpu-map"),
+        None,
+    )
+    if cpu_map is None:
+        raise ValueError("FDT is missing the CPU map")
+    seen_cpu_phandles = set()
+    for cluster_id, cluster_node in enumerate(cpu_map.children):
+        cluster_cpus = []
+        for cluster_core_id, core_node in enumerate(cluster_node.children):
+            references = core_node.cells("cpu")
+            if len(references) != 1:
+                raise ValueError(f"{core_node.path}: expected exactly one CPU reference")
+            phandle = references[0]
+            cpu = cpu_nodes_by_phandle.get(phandle)
+            if cpu is None or phandle in seen_cpu_phandles:
+                raise ValueError(f"{core_node.path}: CPU reference is missing or duplicated")
+            cpu["cluster_id"] = cluster_id
+            cpu["cluster_core_id"] = cluster_core_id
+            seen_cpu_phandles.add(phandle)
+            cluster_cpus.append(cpu["path"])
+        if not cluster_cpus:
+            raise ValueError(f"{cluster_node.path}: CPU cluster is empty")
+        profile["cpu_topology"].append({
+            "cluster_id": cluster_id,
+            "cpu_paths": cluster_cpus,
+        })
+    if seen_cpu_phandles != set(cpu_nodes_by_phandle):
+        raise ValueError("CPU map does not reference every CPU exactly once")
 
     if (not profile["cpus"] or not profile["memory"] or not profile["gic"]
             or not profile["timer"] or not profile["psci"] or not profile["ufs"]):
