@@ -1,0 +1,31 @@
+diff --git a/makedefs/MakeInc.def b/makedefs/MakeInc.def
+--- a/makedefs/MakeInc.def
++++ b/makedefs/MakeInc.def
+@@ -35 +35 @@
+-SUPPORTED_ARM64_MACHINE_CONFIGS = BCM2837 T6000 T8101 T8103 VMAPPLE SWEET
++SUPPORTED_ARM64_MACHINE_CONFIGS = BCM2837 T6000 T8101 T8103 VMAPPLE SWEET VAYU
+@@ -66,1 +66,2 @@
+ MACHINE_FLAGS_ARM64_SWEET = -DARM64_BOARD_CONFIG_SWEET                -march=armv8.2-a+crypto
++MACHINE_FLAGS_ARM64_VAYU = -DARM64_BOARD_CONFIG_VAYU                   -march=armv8.2-a+crypto
+@@ -265 +265 @@
+-ifneq ($(CURRENT_MACHINE_CONFIG),SWEET)
++ifeq ($(filter $(CURRENT_MACHINE_CONFIG),SWEET VAYU),)
+diff --git a/pexpert/pexpert/arm64/board_config.h b/pexpert/pexpert/arm64/board_config.h
+--- a/pexpert/pexpert/arm64/board_config.h
++++ b/pexpert/pexpert/arm64/board_config.h
+@@ -110,2 +110,16 @@
+ #endif  /* ARM64_BOARD_CONFIG_SWEET */
++/*
++ * Vayu shares the SM8150-class ARMv8.2/GICv3 bring-up code with SWEET.
++ * Board identity and Vayu-specific device support are selected separately.
++ */
++#ifdef ARM64_BOARD_CONFIG_VAYU
++#define VAYU 1
++#include <pexpert/arm64/SWEET.h>
++
++#define MAX_L2_CLINE                   6
++#define MAX_CPUS                       8
++#define MAX_CPU_CLUSTERS               1
++#define CORE_NCTRS                     8
++#endif  /* ARM64_BOARD_CONFIG_VAYU */
+ #ifdef ARM64_BOARD_CONFIG_VMAPPLE

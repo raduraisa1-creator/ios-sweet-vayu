@@ -3,14 +3,14 @@
 **Apple's iOS 16 running on a Redmi Note 10 Pro.**
 
 > [!WARNING]
-> **POCO X3 Pro (`vayu`) support is not implemented yet.** This repository currently contains the
-> `sweet` / SM7150 kernel, device-tree generator, and boot instructions only. Do not use the
-> `userdata` image or `fastboot flash` instructions below on a Vayu: they are for a different
-> device and would overwrite its data. No Vayu image has been built or boot-tested here.
+> **POCO X3 Pro (`vayu`) support is not bootable.** This repository contains an unverified VAYU
+> XNU patch/configuration prototype and an experimental offline ADT generator, but no Vayu kernel
+> or boot image has been built or boot-tested. Do not use the `userdata` image or `fastboot flash`
+> instructions below on a Vayu: they target a different device and would overwrite its data.
 
 ## Vayu port status
 
-The target is the POCO X3 Pro (`vayu`, model M2102J20SG), based on Qualcomm SM8150 v2. The current
+The target is the POCO X3 Pro (`vayu`, model M2102J20SG), based on Qualcomm SM8150 v2. Most of
 `xnu/patches/`, `tools/mkadt.py`, and `shim/` are the proven Redmi Note 10 Pro port; their `SWEET`
 machine configuration and board-specific addresses/drivers must not be assumed to work on Vayu.
 
@@ -26,10 +26,22 @@ ignored. Recreate a profile with:
 python tools/vayu_dt.py dtb/live/vayu-live.dtb --output profiles/vayu-hardware.json
 ```
 
-The tool omits `/chosen` (including bootargs and per-device identifiers). The existing kernel build
-and `mkadt.py` are still SWEET-only; this inventory is not a Vayu boot profile or bootable image.
-The DT contains several panel candidates, so the exact active panel is not considered verified.
-No partition, boot, recovery, modem, persist or backup data has been written by this porting work.
+The tool omits `/chosen` (including bootargs and per-device identifiers). Patches `0082`–`0083`
+introduce an unverified `MACHINE_CONFIG=VAYU` path, and `tools/mkvayuadt.py` creates an offline
+experimental ADT using the sanitized Vayu profile. Generate it only for inspection with an
+explicit opt-in:
+
+```sh
+python tools/mkvayuadt.py <local-output.adt> --experimental-highmem
+```
+
+The generator checks the profile's board, CPU/PSCI, GIC, timer, framebuffer reservation, UFS range,
+and contiguous FDT RAM against the prototype ADT values. It also checks the recovery-observed
+memory candidate, but that is not proof of ABL-time ownership. Output is **not bootable**: the
+patches have not been built, the candidate memory map is unverified at handoff, and display/input
+and other Vayu drivers are not implemented. The DT contains several panel candidates, so the
+active panel is not verified. No partition, boot, recovery, modem, persist or backup data has been
+written by this porting work.
 
 An offline memory-map report can subtract the fixed DT reservations and the dynamic CMA ranges
 observed in TWRP:

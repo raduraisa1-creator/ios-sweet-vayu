@@ -1,0 +1,49 @@
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -41,4 +41,18 @@
+     "   },"
+ #endif
++#if defined(ARM64_BOARD_CONFIG_VAYU)
++    "   {"
++    "     'IOClass'         = SweetPlatformExpert;"
++    "     'IOProviderClass' = IOPlatformExpertDevice;"
++    "     'IONameMatch'     = 'xiaomi,vayu';"
++    "     'IOProbeScore'    = 10000:32;"
++    "   },"
++    "   {"
++    "     'IOClass'         = SweetCPU;"
++    "     'IOProviderClass' = IOPlatformDevice;"
++    "     'IONameMatch'     = 'arm,armv8';"
++    "     'IOProbeScore'    = 10000:32;"
++    "   },"
++#endif
+     "   {"
+     "     'IOClass'         = IOPanicPlatform;"
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -80,1 +80,5 @@
+-	strlcpy(name, "sweet", (size_t)maxLength);
++#if defined(VAYU)
++	strlcpy(name, "vayu", (size_t)maxLength);
++#else
++	strlcpy(name, "sweet", (size_t)maxLength);
++#endif
+@@ -91,1 +95,5 @@
+-	strlcpy(name, "Redmi Note 10 Pro", (size_t)maxLength);
++#if defined(VAYU)
++	strlcpy(name, "POCO X3 Pro", (size_t)maxLength);
++#else
++	strlcpy(name, "Redmi Note 10 Pro", (size_t)maxLength);
++#endif
+diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
+--- a/iokit/Kernel/arm/SweetCPU.cpp
++++ b/iokit/Kernel/arm/SweetCPU.cpp
+@@ -62,1 +62,5 @@
+-	cpuName = OSSymbol::withCStringNoCopy("Kryo 470");
++#if defined(VAYU)
++	cpuName = OSSymbol::withCStringNoCopy("Qualcomm ARMv8");
++#else
++	cpuName = OSSymbol::withCStringNoCopy("Kryo 470");
++#endif

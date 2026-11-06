@@ -2,6 +2,13 @@
 
 ## Active Vayu handoff (2026-11-06)
 
+### VAYU prototype milestone (2026-11-06; local validation only)
+- Added XNU patches `0082-vayu-machine-config.patch` and `0083-vayu-platform-and-cpu-match.patch`. They add `MACHINE_CONFIG=VAYU`, keep the existing SWEET arm64v8.2 low-level definitions as an explicitly provisional bootstrap, and add Vayu identity/CPU matches. Patch-format validation passes; they have **not** been applied to a full XNU source tree or built.
+- Added `tools/mkvayuadt.py` and `tests/test_mkvayuadt.py`. The generator requires `--experimental-highmem`, checks that the sanitized hardware profile matches Vayu's CPU/PSCI, GIC, timer, framebuffer reservation, UFS range, and contiguous FDT RAM, and checks the candidate against the TWRP-only memory report. It outputs an experimental ADT derived from the SWEET template; it does not establish a safe boot map or implement Vayu peripheral drivers.
+- Verification: `python -m unittest discover -s tests -v` passed all 11 tests; `python -m compileall -q tools tests` passed; `python tools/validate-repo.py` passed with UTF-8 output (83 contiguous patches and 18 Python tools); `git diff --check` passed. The gated generator wrote an 8,448-byte ADT to a temporary path; `tools.adt.parse` parsed it as a `device-tree` root with eight children. It printed the expected warning that the optional local D22AP product ADT is absent, so the generated ADT has no `/product` node.
+- The first generator test run failed because the candidate spans adjacent FDT RAM ranges and the check did not merge them; the implementation now uses the existing RAM-range merge helper, and the final suite passes. An earlier validator invocation also failed only because Windows' default cp1252 console could not print a checkmark; rerunning with `PYTHONIOENCODING=utf-8` passed. These were local tooling/test issues, not device failures.
+- **Actual blocker/status:** no Vayu XNU compile or GitHub Actions build has succeeded yet; patch application against the complete patched XNU tree remains unverified. ABL-time memory ownership, bootloader handoff, framebuffer/panel, and Vayu-specific UFS/display/input integration are unresolved. No boot image was prepared or booted, and no device storage or partition was written.
+
 ### Confirmed repository state
 - This worktree is based on `origin/main` at merge base `269ef30875b8eaf0280e80e2b3fbad3e6fe8b004`; active branch: `raduraisa1-creator-vayu-ios16-port`.
 - The existing XNU implementation is for Redmi Note 10 Pro (`sweet`, SM7150): the workflow defaults to `MACHINE_CONFIG=SWEET`, `tools/mkadt.py` hardcodes the SM7150/`xiaomi,sweet` identity and sweet MMIO, and existing board-specific patches are SWEET-scoped. The sweet kernel is not a Vayu build.
