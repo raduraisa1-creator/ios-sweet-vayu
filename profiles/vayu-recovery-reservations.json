@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "source": "Read-only TWRP dmesg: Reserved memory: created CMA memory pool",
+  "cma_total_kib": 303104,
+  "cma_pools": [
+    {
+      "base": "0xfd400000",
+      "size": "0x2800000"
+    },
+    {
+      "base": "0xfcc00000",
+      "size": "0x800000"
+    },
+    {
+      "base": "0xfc800000",
+      "size": "0x400000"
+    },
+    {
+      "base": "0xfa400000",
+      "size": "0x2400000"
+    },
+    {
+      "base": "0xf9400000",
+      "size": "0x1000000"
+    },
+    {
+      "base": "0xf8400000",
+      "size": "0x1000000"
+    },
+    {
+      "base": "0xf7400000",
+      "size": "0x1000000"
+    },
+    {
+      "base": "0xed400000",
+      "size": "0xa000000"
+    }
+  ]
+}

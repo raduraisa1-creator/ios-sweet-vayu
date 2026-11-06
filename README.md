@@ -31,6 +31,16 @@ and `mkadt.py` are still SWEET-only; this inventory is not a Vayu boot profile o
 The DT contains several panel candidates, so the exact active panel is not considered verified.
 No partition, boot, recovery, modem, persist or backup data has been written by this porting work.
 
+An offline memory-map report can subtract the fixed DT reservations and the dynamic CMA ranges
+observed in TWRP:
+
+```sh
+python tools/vayu_memory.py profiles/vayu-hardware.json profiles/vayu-recovery-reservations.json
+```
+
+This is evidence from the recovery Linux boot only, not a safe XNU allocation map; it does not
+account for ABL, the shim, the ramdisk, or XNU's memory requirements. Do not boot from its ranges.
+
 The user-provided [HackiOSX porting guide](https://hackiosx.dev/porting.html) is a sequencing
 reference, not a compatible device configuration: its Snapdragon 778G (SM7325) target differs
 from Vayu's SM8150.
