@@ -17,6 +17,7 @@
 - UFS host compatible is `qcom,ufshc`; `ufs_mem` is `0x1d84000/0x2500`, `ufs_ice` is `0x1d90000/0x8000`, interrupt specifier `<0x0 0x109 0x0>`. Thus the prior UFS base was accurate but its size was not verified there. Device-tree panel candidates include EA8076 and other panels; active panel identity remains unverified.
 
 ### Implemented Vayu-specific tooling
+- Implementation commit: `70104f4` (`feat(vayu): inventory live hardware device tree`).
 - Added `tools/vayu_dt.py`, a dependency-free FDT parser/inventory tool. It rejects non-Vayu/non-SM8150 trees and produces a sanitized profile containing only board model/compatible/MSM ID, CPU, memory, reserved-memory, GIC, timer and UFS facts. It excludes `/chosen` to avoid bootargs, serials, seeds, and other per-device values.
 - Added `tests/test_vayu_dt.py` (three unit tests: profile extraction, wrong-target rejection, malformed-header rejection; sanitizer test puts synthetic serial and UFS data under `/chosen` and confirms neither leaks into output).
 - Generated committed summary `profiles/vayu-hardware.json` from the local FDT. It is not a raw device dump or a bootable configuration. Existing XNU workflow/mkadt remain SWEET-only; kernel config/ADT changes must wait until board resources and SoC integration are developed.
