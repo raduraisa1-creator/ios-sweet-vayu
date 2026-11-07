@@ -2,7 +2,12 @@
 """Build the minimal Apple Device Tree that the SWEET xnu needs to boot.
 
 Only what the early boot path actually reads (see NOTES.md); every MMIO
-address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem]
+address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem] [--vayu]
+
+--vayu: Poco X3 Pro (vayu, SM8150-AC). Every vayu value below comes from the
+phone's own live FDT / cpuinfo (see hw/hw-summary.txt). Implies the upper-bank
+memory layout; keeps the 'xiaomi,sweet' compatible so the existing
+SweetPlatformExpert (IONameMatch 'xiaomi,sweet') still matches without a kernel rebuild.
 """
 import hashlib, os, struct, sys
 
@@ -23,6 +28,18 @@ PANIC_LOG_SIZE = 0x100000
 # carve-out is in the low bank and the dynamic pools are limited below 4G.
 HIGH_PHYS_BASE = 0x100000000
 HIGH_MEM_SIZE = 0xfcc00000
+# --vayu: live FDT memory = [0x80000000,0xbcc00000) + [0xc0000000,0x200000000),
+# 5.95 GiB total (6 GB model). Every fixed reserved-memory entry ends below
+# 0xbcc00000 and every dynamic pool has alloc-ranges <= 0xffffffff, so the whole
+# 4 GiB bank at 0x1_00000000 holds no carve-out.  (Runtime TZ/XPU protection of
+# that bank is NOT verifiable from the FDT - see PORTING-LOG.md.)
+VAYU_PHYS_BASE = 0x100000000
+VAYU_MEM_SIZE = 0xfcc00000
+VAYU_ECID = 0x5641595500000001  # 'VAYU' + 1, synthetic
+# Kryo 485: cpu0-3 part 0x805 (Silver, A55-class), cpu4-7 part 0x804 (Gold, A76-class).
+# NOMINAL max clocks (Snapdragon 860 spec), descriptive only - replace with
+# /sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq from the phone.
+VAYU_CPU_HZ = [1785600000] * 4 + [2419200000] * 3 + [2956800000]
 # /arm-io children are relative to this; it must not be 0 (serial_init bails)
 SOC_BASE = 0x01000000
 
@@ -74,9 +91,12 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False):
+def build(seed=None, qemu=False, highmem=False, vayu=False):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
-    phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
+    if vayu:
+        phys_base, mem_size = VAYU_PHYS_BASE, VAYU_MEM_SIZE
+    else:
+        phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
     # Carve the panic log off the top so the kernel never allocates over it.
     panic_base = phys_base + mem_size - PANIC_LOG_SIZE
     mem_size -= PANIC_LOG_SIZE
@@ -111,7 +131,7 @@ def build(seed=None, qemu=False, highmem=False):
         # files), so e.g. DataMigration never records LastSystemVersion and
         # migrates on every boot. Synthetic ECID (not the phone's); chip-id
         # of the A11 that the iPhone X userland expects.
-        ('unique-chip-id', struct.pack('<Q', SWEET_ECID)),
+        ('unique-chip-id', struct.pack('<Q', VAYU_ECID if vayu else SWEET_ECID)),
         ('chip-id', u32(0x8015)),
         # Security status as on a dev-fused, undemoted board (tuple 0,0,1,1):
         # MobileGestalt reads these from /chosen, and mobileactivationd's
@@ -130,7 +150,8 @@ def build(seed=None, qemu=False, highmem=False):
         node('asmb', [ph(), ('lp-sip0', u64(0x6f)), ('lp-sip1', u32(1))])])
 
     # SWEET SMP: all eight cores in physical-core order (0-5 Cortex-A55,
-    # 6-7 Cortex-A76), one homogeneous cluster. The kernel defaults to one
+    # 6-7 Cortex-A76), one homogeneous cluster. vayu: 0-3 A55-class, 4-7 A76-class,
+    # same MPIDR scheme (Aff1 = core, verified from the live FDT). The kernel defaults to one
     # and uses cpus=N to select an initial prefix (N <= 8).
     # QEMU retains its original single-CPU tree: its MPIDRs differ from sweet.
     cpu_nodes = []
@@ -149,7 +170,7 @@ def build(seed=None, qemu=False, highmem=False):
             ('l3-cache-id', u32(0)),     # shared L3
             ('state', cstr('running' if core == 0 else 'stopped')),
             ('timebase-frequency', u32(timebase)),
-            ('clock-frequency', u32(2304000000 if core >= 6 else 1804800000)),
+            ('clock-frequency', u32(VAYU_CPU_HZ[core] if vayu else (2304000000 if core >= 6 else 1804800000))),
             ('bus-frequency', u32(100000000)),
             ('memory-frequency', u32(1866000000)),
             ('peripheral-frequency', u32(timebase)),
@@ -231,7 +252,9 @@ def build(seed=None, qemu=False, highmem=False):
     # (iPhone10,3). 'xiaomi,sweet' stays for SweetPlatformExpert matching.
     return node('device-tree', [
         ph(),
-        ('compatible', cstr('D22AP') + cstr('iPhone10,3') + cstr('xiaomi,sweet') + cstr('qcom,sm7150') + cstr('AppleARM')),
+        ('compatible', cstr('D22AP') + cstr('iPhone10,3') + cstr('xiaomi,sweet')
+                       + (cstr('xiaomi,vayu') + cstr('qcom,sm8150') if vayu else cstr('qcom,sm7150'))
+                       + cstr('AppleARM')),
         ('model', cstr('iPhone10,3')),
         ('target-type', cstr('D22')),
         ('target-sub-type', cstr('D22AP')),
@@ -242,7 +265,7 @@ def build(seed=None, qemu=False, highmem=False):
 
 
 if __name__ == '__main__':
-    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv)
+    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv, vayu='--vayu' in sys.argv)
     blob = adt.serialize(root)
     open(sys.argv[1], 'wb').write(blob)
     if '--dump' in sys.argv:
