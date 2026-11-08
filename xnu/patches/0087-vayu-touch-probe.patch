@@ -1,0 +1,169 @@
+--- a/bsd/conf/files	2026-11-08 09:18:37.553820965 +0000
++++ b/bsd/conf/files	2026-11-08 09:18:37.585545930 +0000
+@@ -5,2 +5,3 @@
+ bsd/dev/sweet_touch.c			standard
++bsd/dev/sweet_nvt.c			standard
+ bsd/dev/sweet_rpmh.c			standard
+--- /dev/null
++++ b/bsd/dev/sweet_nvt.c	2026-11-08 09:18:37.588236114 +0000
+@@ -0,0 +1,146 @@
++/*
++ * vayu Novatek touch: STAGE 1, PASSIVE PROBE (boot-arg sweettouch=2).
++ *
++ * Reads clock and pin state only. This file performs NO MMIO writes, so it
++ * cannot change clocks, pins or the touch IC. It reports:
++ *   - the QUP wrapper 2 clock branches that the touch SPI engine (se17,
++ *     0xc80000) uses, and whether ABL already left them running
++ *   - the TLMM state of the touch pins (SPI 55-58, reset 12, interrupt 122)
++ *   - whether the interrupt pin moves in a short window
++ * All offsets come from Xiaomi vayu-r-oss (gcc-sm8150.c, pinctrl-sm8150.c)
++ * and the live vayu device tree.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern kern_return_t thread_terminate(thread_t);
++void sweet_nvt_start(void);
++
++#define NVT_GCC_PA      0x00100000u
++#define NVT_GCC_LEN     0x00060000u
++#define NVT_NORTH_PA    0x03900000u   /* TLMM 0x3000000 + NORTH 0x900000 */
++#define NVT_NORTH_LEN   0x00020000u   /* pins 0..31 */
++#define NVT_SOUTH_PA    0x03d00000u   /* TLMM 0x3000000 + SOUTH 0xd00000 */
++#define NVT_SOUTH_LEN   0x00080000u   /* pins up to 127 */
++
++/* gcc-sm8150.c, QUP wrapper 2, slot 0 (touch = se17) */
++#define GCC_VOTE        0x52014u      /* bit1 s_ahb, bit2 m_ahb, bit4 s0 clk */
++#define GCC_W2_M_AHB    0x1e004u
++#define GCC_W2_S_AHB    0x1e008u
++#define GCC_W2_CORE_2X  0x1e00cu      /* offsets inferred from wrapper 1 layout */
++#define GCC_W2_CORE     0x1e010u
++#define GCC_W2_S0       0x1e144u
++#define GCC_W2_S0_RCG   0x1e148u
++
++static int nvt_chan;
++static bool nvt_started;
++
++static uint32_t
++nvt_rd(vm_offset_t base, uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(base + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return v;
++}
++
++static void
++nvt_wait(unsigned ms)
++{
++	uint64_t deadline;
++	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline(&nvt_chan, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++static void
++nvt_pin(vm_offset_t tile, unsigned pin, const char *name)
++{
++	uint32_t ctl = nvt_rd(tile, (pin & 0x7fu) * 0x1000u);
++	uint32_t io = nvt_rd(tile, (pin & 0x7fu) * 0x1000u + 4u);
++	/* ctl: [1:0] pull, [5:2] mux, [8:6] drive, [9] output enable. io: [0] in, [1] out */
++	printf("SWEET NVT: gpio%u %s ctl=%#x (mux %u pull %u drv %u oe %u) io=%#x (in %u out %u)\n",
++	    pin, name, ctl, (ctl >> 2) & 0xfu, ctl & 3u, (ctl >> 6) & 7u, (ctl >> 9) & 1u,
++	    io, io & 1u, (io >> 1) & 1u);
++}
++
++static void
++nvt_thread(void *arg, wait_result_t w)
++{
++	(void)arg;
++	(void)w;
++	int delay_s = 60;
++	(void)PE_parse_boot_argn("sweettouchdelay", &delay_s, sizeof(delay_s));
++	if (delay_s < 1 || delay_s > 600) {
++		delay_s = 60;
++	}
++	printf("SWEET NVT: probe starts in %d s (read-only, no MMIO writes)\n", delay_s);
++	nvt_wait((unsigned)delay_s * 1000u);
++
++	vm_offset_t gcc = ml_io_map(NVT_GCC_PA, NVT_GCC_LEN);
++	vm_offset_t north = ml_io_map(NVT_NORTH_PA, NVT_NORTH_LEN);
++	vm_offset_t south = ml_io_map(NVT_SOUTH_PA, NVT_SOUTH_LEN);
++	if (!gcc || !north || !south) {
++		printf("SWEET NVT: MMIO mapping failed gcc=%p north=%p south=%p\n",
++		    (void *)gcc, (void *)north, (void *)south);
++		goto out;
++	}
++
++	/* A CBCR with bit 31 set (CLK_OFF) is halted. */
++	printf("SWEET NVT: wrap2 vote=%#x (b1 s_ahb=%u b2 m_ahb=%u b4 s0=%u)\n",
++	    nvt_rd(gcc, GCC_VOTE), (nvt_rd(gcc, GCC_VOTE) >> 1) & 1u,
++	    (nvt_rd(gcc, GCC_VOTE) >> 2) & 1u, (nvt_rd(gcc, GCC_VOTE) >> 4) & 1u);
++	printf("SWEET NVT: wrap2 CBCR m_ahb=%#x s_ahb=%#x core2x=%#x core=%#x s0=%#x\n",
++	    nvt_rd(gcc, GCC_W2_M_AHB), nvt_rd(gcc, GCC_W2_S_AHB),
++	    nvt_rd(gcc, GCC_W2_CORE_2X), nvt_rd(gcc, GCC_W2_CORE), nvt_rd(gcc, GCC_W2_S0));
++	printf("SWEET NVT: s0 RCG cmd=%#x cfg=%#x (dfs cmd bit 12 and perf regs at +0x14/+0x1c: %#x %#x)\n",
++	    nvt_rd(gcc, GCC_W2_S0_RCG), nvt_rd(gcc, GCC_W2_S0_RCG + 4u),
++	    nvt_rd(gcc, GCC_W2_S0_RCG + 0x14u), nvt_rd(gcc, GCC_W2_S0_RCG + 0x1cu));
++
++	nvt_pin(north, 12, "reset");
++	nvt_pin(south, 55, "spi");
++	nvt_pin(south, 56, "spi");
++	nvt_pin(south, 57, "spi");
++	nvt_pin(south, 58, "cs");
++	nvt_pin(south, 122, "irq");
++
++	/* Does the interrupt pin move? 40 samples, 50 ms apart. */
++	uint32_t last = nvt_rd(south, 122u * 0x1000u + 4u) & 1u;
++	unsigned changes = 0;
++	for (unsigned i = 0; i < 40; ++i) {
++		nvt_wait(50);
++		uint32_t now = nvt_rd(south, 122u * 0x1000u + 4u) & 1u;
++		if (now != last) {
++			++changes;
++			last = now;
++		}
++	}
++	printf("SWEET NVT: irq pin changes in 2 s: %u (final level %u)\n", changes, last);
++	printf("SWEET NVT: probe done\n");
++out:
++	(void)thread_terminate(current_thread());
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++void
++sweet_nvt_start(void)
++{
++	thread_t thread;
++	if (nvt_started) {
++		return;
++	}
++	nvt_started = true;
++	kern_return_t kr = kernel_thread_start(nvt_thread, NULL, &thread);
++	if (kr == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	} else {
++		printf("SWEET NVT: kernel_thread_start failed %d\n", kr);
++	}
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+--- a/bsd/dev/sweet_touch.c	2026-11-08 09:18:37.552664921 +0000
++++ b/bsd/dev/sweet_touch.c	2026-11-08 09:18:37.585700208 +0000
+@@ -23,2 +23,3 @@
+ void sweet_touch_init(void);
++extern void sweet_nvt_start(void);
+ 
+@@ -651,2 +652,7 @@
+ 		return;
++	}
++	if (enabled == 2) {
++		printf("SWEET TOUCH: sweettouch=2, vayu Novatek probe (Goodix driver not started)\n");
++		sweet_nvt_start();
++		return;
+ 	}
