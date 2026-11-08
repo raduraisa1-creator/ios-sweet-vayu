@@ -26,6 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  GH_TOKEN: ${{ github.token }}
   DXB_REPO: https://github.com/blacktop/darwin-xnu-build
   DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
   MACOS_VERSION: ${{ inputs.macos_version || '13.5' }}
@@ -60,6 +61,7 @@ jobs:
           sed -i '' 's|git apply "\$PATCH"|git apply --unidiff-zero "\$PATCH"|' dxb/build.sh
           grep -q 'git apply --unidiff-zero --check' dxb/build.sh
           grep -q 'git apply --unidiff-zero "\$PATCH"' dxb/build.sh
+          python3 .github/patch-kdk.py dxb/build.sh
           # libfirehose_kernel is built arm64e-only; the SWEET kernel is plain arm64
           sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' dxb/build.sh
           grep -c 'VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh
