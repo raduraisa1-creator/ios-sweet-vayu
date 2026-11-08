@@ -6,18 +6,19 @@
  bsd/dev/sweet_rpmh.c			standard
 --- /dev/null
 +++ b/bsd/dev/sweet_nvt.c	2026-11-08 09:18:37.588236114 +0000
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,508 @@
 +/*
-+ * vayu Novatek touch: STAGE 1, PASSIVE PROBE (boot-arg sweettouch=2).
++ * vayu Novatek touch bring-up (boot-arg sweettouch=2).
 + *
-+ * Reads clock and pin state only. This file performs NO MMIO writes, so it
-+ * cannot change clocks, pins or the touch IC. It reports:
-+ *   - the QUP wrapper 2 clock branches that the touch SPI engine (se17,
-+ *     0xc80000) uses, and whether ABL already left them running
-+ *   - the TLMM state of the touch pins (SPI 55-58, reset 12, interrupt 122)
-+ *   - whether the interrupt pin moves in a short window
-+ * All offsets come from Xiaomi vayu-r-oss (gcc-sm8150.c, pinctrl-sm8150.c)
-+ * and the live vayu device tree.
++ *   nvtstage=1 (default)  PASSIVE: read clock and pin state only, no writes.
++ *   nvtstage=2            ACTIVE PROBE: vote the QUP wrapper 2 clocks, set the
++ *                         touch pins, release the touch reset, configure the
++ *                         SPI engine (se17, 0xc80000) and read the 6-byte
++ *                         Novatek chip ID. No firmware download, no input.
++ *
++ * Sources: Xiaomi vayu-r-oss nt36xxx driver (SPI framing, reset, chip ID),
++ * Linux gcc-sm8150.c / pinctrl-sm8150.c / spi-geni-qcom.c (offsets).
++ * Every stage stops at the first thing that does not look right and says why.
 + */
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
 +#include <sys/param.h>
@@ -38,18 +39,75 @@
 +#define NVT_NORTH_LEN   0x00020000u   /* pins 0..31 */
 +#define NVT_SOUTH_PA    0x03d00000u   /* TLMM 0x3000000 + SOUTH 0xd00000 */
 +#define NVT_SOUTH_LEN   0x00080000u   /* pins up to 127 */
++#define NVT_SE_PA       0x00c80000u   /* QUP wrapper 2, slot 0 = se17 */
++#define NVT_SE_LEN      0x00004000u
 +
-+/* gcc-sm8150.c, QUP wrapper 2, slot 0 (touch = se17) */
++/* gcc-sm8150.c, QUP wrapper 2, slot 0 */
 +#define GCC_VOTE        0x52014u      /* bit1 s_ahb, bit2 m_ahb, bit4 s0 clk */
 +#define GCC_W2_M_AHB    0x1e004u
 +#define GCC_W2_S_AHB    0x1e008u
-+#define GCC_W2_CORE_2X  0x1e00cu      /* offsets inferred from wrapper 1 layout */
-+#define GCC_W2_CORE     0x1e010u
 +#define GCC_W2_S0       0x1e144u
 +#define GCC_W2_S0_RCG   0x1e148u
 +
++/* GENI serial engine registers (Linux qcom-geni-se.c / spi-geni-qcom.c) */
++#define SE_FORCE_DEFAULT 0x020u
++#define SE_OUTPUT_CTRL   0x024u
++#define SE_CGC_CTRL      0x028u
++#define SE_STATUS        0x040u
++#define SE_MCLK          0x048u
++#define SE_FW            0x068u
++#define SE_CLK_SEL       0x07cu
++#define SE_SPI_CPHA      0x224u
++#define SE_SPI_LOOPBACK  0x22cu
++#define SE_SPI_CPOL      0x230u
++#define SE_SPI_DEMUX_INV 0x24cu
++#define SE_SPI_DEMUX_SEL 0x250u
++#define SE_BYTE_GRAN     0x254u
++#define SE_DMA           0x258u
++#define SE_SPI_TRANS_CFG 0x25cu
++#define SE_TX_PACK0      0x260u
++#define SE_TX_PACK1      0x264u
++#define SE_SPI_WORD_LEN  0x268u
++#define SE_TX_LEN        0x26cu
++#define SE_RX_LEN        0x270u
++#define SE_SPI_PREPOST   0x274u
++#define SE_SPI_DELAYS    0x278u
++#define SE_RX_PACK0      0x284u
++#define SE_RX_PACK1      0x288u
++#define SE_CMD           0x600u
++#define SE_CTRL          0x604u
++#define SE_IRQ           0x610u
++#define SE_IRQ_EN        0x614u
++#define SE_IRQ_CLR       0x618u
++#define SE_TX            0x700u
++#define SE_RX            0x780u
++#define SE_TX_COUNT      0x800u
++#define SE_RX_COUNT      0x804u
++#define SE_TX_WM         0x80cu
++#define SE_RX_WM         0x810u
++#define SE_RFR_WM        0x814u
++#define SE_GSI_EVT       0xe18u
++#define SE_IRQ_ENABLE    0xe1cu
++#define SE_HW_TX         0xe24u
++#define SE_HW_RX         0xe28u
++#define SE_DMA_GENERAL   0xe30u
++
++#define SPI_FULL_DUPLEX  3u
++#define SPI_IRQ_DONE     (1u << 0)
++#define SPI_IRQ_ABORT    (1u << 5)
++#define SPI_IRQ_ERRORS   (0x0eu | (1u << 10) | (1u << 12) | (1u << 13))
++#define SPI_IRQ_EVENTS   (SPI_IRQ_DONE | SPI_IRQ_ERRORS | SPI_IRQ_ABORT | \
++                          (1u << 26) | (1u << 27) | (1u << 30))
++
++/* Novatek NT36675 (memory map NT36675_memory_map) */
++#define NVT_SWRST_N8     0x3f0feu
++#define NVT_SPI_RD_FAST  0x3f310u
++
 +static int nvt_chan;
 +static bool nvt_started;
++static vm_offset_t nvt_gcc, nvt_north, nvt_south, nvt_se;
++static unsigned nvt_tx_depth;      /* TX FIFO depth in 32-bit words */
++static uint32_t nvt_last_irq;
 +
 +static uint32_t
 +nvt_rd(vm_offset_t base, uint32_t off)
@@ -60,12 +118,32 @@
 +}
 +
 +static void
++nvt_wr(vm_offset_t base, uint32_t off, uint32_t val)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(base + off) = val;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
++static void
 +nvt_wait(unsigned ms)
 +{
 +	uint64_t deadline;
 +	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
 +	(void)assert_wait_deadline(&nvt_chan, THREAD_UNINT, deadline);
 +	thread_block(THREAD_CONTINUE_NULL);
++}
++
++static bool
++nvt_wait_clear(vm_offset_t base, uint32_t off, uint32_t mask)
++{
++	for (unsigned i = 0; i < 5000; ++i) {
++		if (!(nvt_rd(base, off) & mask)) {
++			return true;
++		}
++		delay(1);
++	}
++	return false;
 +}
 +
 +static void
@@ -79,58 +157,342 @@
 +	    io, io & 1u, (io >> 1) & 1u);
 +}
 +
++/* mux function, pull (0 none, 1 down, 2 keeper, 3 up), drive (0..7), output */
++static void
++nvt_gpio(vm_offset_t tile, unsigned pin, unsigned mux, unsigned pull,
++    unsigned drive, bool out, bool level)
++{
++	uint32_t off = (pin & 0x7fu) * 0x1000u;
++	uint32_t cfg = nvt_rd(tile, off);
++	if (out) {
++		/* Latch the level before enabling the driver: no glitch on reset. */
++		uint32_t io = nvt_rd(tile, off + 4u);
++		io = level ? (io | 2u) : (io & ~2u);
++		nvt_wr(tile, off + 4u, io);
++	}
++	cfg &= ~0x3ffu;
++	cfg |= (mux << 2) | pull | (drive << 6) | (out ? 0x200u : 0u);
++	nvt_wr(tile, off, cfg);
++}
++
++/* ---- clocks ---- */
++static bool
++nvt_clocks(void)
++{
++	nvt_wr(nvt_gcc, GCC_VOTE, nvt_rd(nvt_gcc, GCC_VOTE) | (1u << 1) | (1u << 2) | (1u << 4));
++	const uint32_t branches[] = {GCC_W2_M_AHB, GCC_W2_S_AHB, GCC_W2_S0};
++	for (unsigned i = 0; i < 3; ++i) {
++		if (!nvt_wait_clear(nvt_gcc, branches[i], 1u << 31)) {
++			printf("SWEET NVT: GCC branch %#x still halted (%#x) after vote %#x\n",
++			    branches[i], nvt_rd(nvt_gcc, branches[i]), nvt_rd(nvt_gcc, GCC_VOTE));
++			return false;
++		}
++	}
++	uint32_t dfs = nvt_rd(nvt_gcc, GCC_W2_S0_RCG + 0x14u);
++	uint32_t cfg = nvt_rd(nvt_gcc, GCC_W2_S0_RCG + 4u);
++	if (dfs & 1u) {
++		/* SE CLK_SEL=0 selects DFS level 0. It must be XO/1 = 19.2 MHz. */
++		uint32_t l0 = nvt_rd(nvt_gcc, GCC_W2_S0_RCG + 0x1cu);
++		if ((l0 & 0x371fu) != 1u) {
++			printf("SWEET NVT: DFS level0=%#x is not XO/1; stopping\n", l0);
++			return false;
++		}
++	} else {
++		cfg = (cfg & ~(0x371fu | (1u << 20))) | 1u;
++		nvt_wr(nvt_gcc, GCC_W2_S0_RCG + 4u, cfg);
++		nvt_wr(nvt_gcc, GCC_W2_S0_RCG, nvt_rd(nvt_gcc, GCC_W2_S0_RCG) | 1u);
++		if (!nvt_wait_clear(nvt_gcc, GCC_W2_S0_RCG, 1u)) {
++			printf("SWEET NVT: RCG update timeout\n");
++			return false;
++		}
++	}
++	printf("SWEET NVT: clocks on: vote=%#x m_ahb=%#x s_ahb=%#x s0=%#x rcg=%#x\n",
++	    nvt_rd(nvt_gcc, GCC_VOTE), nvt_rd(nvt_gcc, GCC_W2_M_AHB),
++	    nvt_rd(nvt_gcc, GCC_W2_S_AHB), nvt_rd(nvt_gcc, GCC_W2_S0),
++	    nvt_rd(nvt_gcc, GCC_W2_S0_RCG));
++	return true;
++}
++
++/* ---- GENI SPI engine ---- */
++static bool
++nvt_se_init(void)
++{
++	uint32_t fw = nvt_rd(nvt_se, SE_FW);
++	uint32_t tx = nvt_rd(nvt_se, SE_HW_TX), rx = nvt_rd(nvt_se, SE_HW_RX);
++	uint32_t st = nvt_rd(nvt_se, SE_STATUS);
++	printf("SWEET NVT: se17 fw=%#x proto=%u status=%#x hw_tx=%#x hw_rx=%#x\n",
++	    fw, (fw >> 8) & 0xffu, st, tx, rx);
++	if (((fw >> 8) & 0xffu) != 1u) {
++		printf("SWEET NVT: se17 protocol is %u, not SPI(1): no SPI firmware loaded; stopping\n",
++		    (fw >> 8) & 0xffu);
++		return false;
++	}
++	if (((tx >> 24) & 0x3fu) != 32u || ((rx >> 24) & 0x3fu) != 32u ||
++	    ((tx >> 16) & 0x3fu) < 2u || ((rx >> 16) & 0x3fu) < 2u) {
++		printf("SWEET NVT: unexpected FIFO geometry; stopping\n");
++		return false;
++	}
++	if (st & 0x1001u) {
++		printf("SWEET NVT: se17 busy; stopping\n");
++		return false;
++	}
++	nvt_tx_depth = (tx >> 16) & 0x3fu;
++	nvt_wr(nvt_se, SE_GSI_EVT, 0);
++	nvt_wr(nvt_se, SE_IRQ_ENABLE, 0);  /* poll the local status instead */
++	nvt_wr(nvt_se, SE_IRQ_CLR, 0xffffffffu);
++	nvt_wr(nvt_se, SE_DMA, 0);         /* FIFO mode */
++	nvt_wr(nvt_se, SE_CGC_CTRL, nvt_rd(nvt_se, SE_CGC_CTRL) | 0x7fu);
++	nvt_wr(nvt_se, SE_DMA_GENERAL, nvt_rd(nvt_se, SE_DMA_GENERAL) | 0x0fu);
++	nvt_wr(nvt_se, SE_OUTPUT_CTRL, 0x7f);
++	nvt_wr(nvt_se, SE_FORCE_DEFAULT, 1);
++	nvt_wr(nvt_se, SE_CLK_SEL, 0);
++	/* 19.2 MHz / 4 (/2 more if the oversampling is 2): slow and safe for the ID read */
++	nvt_wr(nvt_se, SE_MCLK, (4u << 4) | 1u);
++	/* SPI mode 0, 8-bit words, chip select 0, no loopback */
++	nvt_wr(nvt_se, SE_SPI_CPHA, 0);
++	nvt_wr(nvt_se, SE_SPI_CPOL, 0);
++	nvt_wr(nvt_se, SE_SPI_LOOPBACK, 0);
++	nvt_wr(nvt_se, SE_SPI_DEMUX_INV, 0);
++	nvt_wr(nvt_se, SE_SPI_DEMUX_SEL, 0);
++	nvt_wr(nvt_se, SE_SPI_TRANS_CFG, 0);
++	nvt_wr(nvt_se, SE_SPI_WORD_LEN, 8u - 4u);
++	nvt_wr(nvt_se, SE_SPI_PREPOST, 0);
++	nvt_wr(nvt_se, SE_SPI_DELAYS, 0);
++	/* four 8-bit bytes per 32-bit FIFO word, first byte in the low byte */
++	nvt_wr(nvt_se, SE_BYTE_GRAN, 0);
++	nvt_wr(nvt_se, SE_TX_PACK0, 0x0004380eu);
++	nvt_wr(nvt_se, SE_TX_PACK1, 0x000c3e0eu);
++	nvt_wr(nvt_se, SE_RX_PACK0, 0x0004380eu);
++	nvt_wr(nvt_se, SE_RX_PACK1, 0x000c3e0eu);
++	nvt_wr(nvt_se, SE_TX_WM, 1);
++	nvt_wr(nvt_se, SE_RX_WM, 0);
++	nvt_wr(nvt_se, SE_RFR_WM, ((rx >> 16) & 0x3fu) - 1u);
++	nvt_wr(nvt_se, SE_IRQ_EN, SPI_IRQ_EVENTS);
++	if ((nvt_rd(nvt_se, SE_TX_COUNT) & 0xfffffffu) ||
++	    (nvt_rd(nvt_se, SE_RX_COUNT) & 0x1ffffffu)) {
++		printf("SWEET NVT: inherited FIFO data; stopping\n");
++		return false;
++	}
++	return true;
++}
++
++static void
++nvt_abort(void)
++{
++	nvt_wr(nvt_se, SE_CTRL, 2);
++	for (unsigned i = 0; i < 5000; ++i) {
++		if (nvt_rd(nvt_se, SE_IRQ) & SPI_IRQ_ABORT) {
++			break;
++		}
++		delay(1);
++	}
++	for (unsigned i = 0; i < 64 && (nvt_rd(nvt_se, SE_RX_COUNT) & 0x1ffffffu); ++i) {
++		(void)nvt_rd(nvt_se, SE_RX);
++	}
++	nvt_wr(nvt_se, SE_IRQ_CLR, 0xffffffffu);
++}
++
++/* One full-duplex transfer of n bytes (1..255): chip select is held for all n. */
++static int
++nvt_xfer(const uint8_t *tx, uint8_t *rx, unsigned n)
++{
++	if (n == 0 || n > 255) {
++		return EINVAL;
++	}
++	if (!nvt_wait_clear(nvt_se, SE_STATUS, 1u)) {
++		return EBUSY;
++	}
++	nvt_wr(nvt_se, SE_IRQ_CLR, 0xffffffffu);
++	nvt_wr(nvt_se, SE_TX_WM, 1);
++	nvt_wr(nvt_se, SE_TX_LEN, n);
++	nvt_wr(nvt_se, SE_RX_LEN, n);
++	nvt_wr(nvt_se, SE_CMD, SPI_FULL_DUPLEX << 27);
++	unsigned sent = 0, got = 0;
++	int err = ETIMEDOUT;
++	for (unsigned i = 0; i < 50000; ++i) {
++		uint32_t irq = nvt_rd(nvt_se, SE_IRQ);
++		nvt_last_irq = irq;
++		if (irq & SPI_IRQ_ERRORS) {
++			err = EIO;
++			break;
++		}
++		if (sent < n) {
++			uint32_t used = nvt_rd(nvt_se, SE_TX_COUNT) & 0xfffffffu;
++			while (sent < n && used < nvt_tx_depth) {
++				uint32_t word = 0;
++				for (unsigned j = 0; j < 4 && sent + j < n; ++j) {
++					word |= (uint32_t)tx[sent + j] << (8u * j);
++				}
++				nvt_wr(nvt_se, SE_TX, word);
++				sent += 4;
++				++used;
++			}
++			if (sent >= n) {
++				sent = n;
++				nvt_wr(nvt_se, SE_TX_WM, 0);
++			}
++		}
++		uint32_t cnt = nvt_rd(nvt_se, SE_RX_COUNT) & 0x1ffffffu;
++		if (cnt > 64) {
++			err = EIO;
++			break;
++		}
++		while (cnt--) {
++			uint32_t word = nvt_rd(nvt_se, SE_RX);
++			for (unsigned j = 0; j < 4 && got < n; ++j) {
++				rx[got++] = (uint8_t)(word >> (8u * j));
++			}
++		}
++		if (irq & SPI_IRQ_DONE) {
++			nvt_wr(nvt_se, SE_IRQ_CLR, irq);
++			if (got == n && sent == n) {
++				return 0;
++			}
++			err = EIO;
++			break;
++		}
++		nvt_wr(nvt_se, SE_IRQ_CLR, irq & ((1u << 26) | (1u << 27) | (1u << 30)));
++		delay(1);
++	}
++	nvt_abort();
++	return err;
++}
++
++/* ---- Novatek framing (nt36xxx.c) ---- */
++static int
++nvt_set_page(uint32_t addr)
++{
++	uint8_t tx[3] = {0xff, (uint8_t)(addr >> 15), (uint8_t)(addr >> 7)};
++	uint8_t rx[3];
++	return nvt_xfer(tx, rx, 3);
++}
++
++static int
++nvt_write_addr(uint32_t addr, uint8_t data)
++{
++	int err = nvt_set_page(addr);
++	if (err) {
++		return err;
++	}
++	uint8_t tx[2] = {(uint8_t)((addr & 0x7fu) | 0x80u), data};
++	uint8_t rx[2];
++	return nvt_xfer(tx, rx, 2);
++}
++
++/* Read len (1..32) bytes at addr: len+2 byte transfer, data starts at rx[2]. */
++static int
++nvt_read_addr(uint32_t addr, uint8_t *out, unsigned len)
++{
++	uint8_t tx[34] = {0}, rx[34] = {0};
++	if (len == 0 || len > 32) {
++		return EINVAL;
++	}
++	int err = nvt_set_page(addr);
++	if (err) {
++		return err;
++	}
++	tx[0] = (uint8_t)(addr & 0x7fu);
++	err = nvt_xfer(tx, rx, len + 2u);
++	if (err) {
++		return err;
++	}
++	for (unsigned i = 0; i < len; ++i) {
++		out[i] = rx[2 + i];
++	}
++	return 0;
++}
++
++static bool
++nvt_id_ok(const uint8_t *id)
++{
++	/* trim_id_table, NT36675 entries */
++	if (id[0] == 0x0c && id[3] == 0x72 && id[4] == 0x66 && id[5] == 0x03) {
++		return true;
++	}
++	return id[3] == 0x75 && id[4] == 0x66 && id[5] == 0x03;
++}
++
++static void
++nvt_stage2(void)
++{
++	nvt_se = ml_io_map(NVT_SE_PA, NVT_SE_LEN);
++	if (!nvt_se) {
++		printf("SWEET NVT: se17 mapping failed\n");
++		return;
++	}
++	if (!nvt_clocks() || !nvt_se_init()) {
++		return;
++	}
++	/* Reset line high first (it was an input with pull-down: IC held in reset). */
++	nvt_gpio(nvt_north, 12, 0, 0, 2, true, true);
++	for (unsigned p = 55; p <= 58; ++p) {
++		nvt_gpio(nvt_south, p, 1, 0, 2, false, false);  /* qup17 SPI function */
++	}
++	nvt_wait(20);
++	nvt_pin(nvt_north, 12, "reset(now)");
++	for (unsigned p = 55; p <= 58; ++p) {
++		nvt_pin(nvt_south, p, "spi(now)");
++	}
++	printf("SWEET NVT: irq pin level after reset release: %u\n",
++	    nvt_rd(nvt_south, 122u * 0x1000u + 4u) & 1u);
++	nvt_wait(50);
++	for (unsigned tries = 0; tries < 5; ++tries) {
++		uint8_t id[6] = {0};
++		int e1 = nvt_write_addr(NVT_SWRST_N8, 0x69);      /* bootloader reset */
++		nvt_wait(5);
++		int e2 = nvt_write_addr(NVT_SPI_RD_FAST, 0x00);
++		int e3 = nvt_set_page(0x1f600);
++		int e4 = nvt_read_addr(0x4e, id, 6);
++		printf("SWEET NVT: try %u err=%d/%d/%d/%d chip id %02x %02x %02x %02x %02x %02x irq=%#x\n",
++		    tries, e1, e2, e3, e4, id[0], id[1], id[2], id[3], id[4], id[5], nvt_last_irq);
++		if (!e1 && !e2 && !e3 && !e4 && nvt_id_ok(id)) {
++			printf("SWEET NVT: *** NT36675 FOUND on SPI ***\n");
++			return;
++		}
++		nvt_wait(10);
++	}
++	printf("SWEET NVT: chip id not recognised (see the ids above)\n");
++}
++
 +static void
 +nvt_thread(void *arg, wait_result_t w)
 +{
 +	(void)arg;
 +	(void)w;
 +	int delay_s = 60;
++	int stage = 1;
 +	(void)PE_parse_boot_argn("sweettouchdelay", &delay_s, sizeof(delay_s));
++	(void)PE_parse_boot_argn("nvtstage", &stage, sizeof(stage));
 +	if (delay_s < 1 || delay_s > 600) {
 +		delay_s = 60;
 +	}
-+	printf("SWEET NVT: probe starts in %d s (read-only, no MMIO writes)\n", delay_s);
++	printf("SWEET NVT: probe starts in %d s (stage %d)\n", delay_s, stage);
 +	nvt_wait((unsigned)delay_s * 1000u);
 +
-+	vm_offset_t gcc = ml_io_map(NVT_GCC_PA, NVT_GCC_LEN);
-+	vm_offset_t north = ml_io_map(NVT_NORTH_PA, NVT_NORTH_LEN);
-+	vm_offset_t south = ml_io_map(NVT_SOUTH_PA, NVT_SOUTH_LEN);
-+	if (!gcc || !north || !south) {
++	nvt_gcc = ml_io_map(NVT_GCC_PA, NVT_GCC_LEN);
++	nvt_north = ml_io_map(NVT_NORTH_PA, NVT_NORTH_LEN);
++	nvt_south = ml_io_map(NVT_SOUTH_PA, NVT_SOUTH_LEN);
++	if (!nvt_gcc || !nvt_north || !nvt_south) {
 +		printf("SWEET NVT: MMIO mapping failed gcc=%p north=%p south=%p\n",
-+		    (void *)gcc, (void *)north, (void *)south);
++		    (void *)nvt_gcc, (void *)nvt_north, (void *)nvt_south);
 +		goto out;
 +	}
 +
-+	/* A CBCR with bit 31 set (CLK_OFF) is halted. */
-+	printf("SWEET NVT: wrap2 vote=%#x (b1 s_ahb=%u b2 m_ahb=%u b4 s0=%u)\n",
-+	    nvt_rd(gcc, GCC_VOTE), (nvt_rd(gcc, GCC_VOTE) >> 1) & 1u,
-+	    (nvt_rd(gcc, GCC_VOTE) >> 2) & 1u, (nvt_rd(gcc, GCC_VOTE) >> 4) & 1u);
-+	printf("SWEET NVT: wrap2 CBCR m_ahb=%#x s_ahb=%#x core2x=%#x core=%#x s0=%#x\n",
-+	    nvt_rd(gcc, GCC_W2_M_AHB), nvt_rd(gcc, GCC_W2_S_AHB),
-+	    nvt_rd(gcc, GCC_W2_CORE_2X), nvt_rd(gcc, GCC_W2_CORE), nvt_rd(gcc, GCC_W2_S0));
-+	printf("SWEET NVT: s0 RCG cmd=%#x cfg=%#x (dfs cmd bit 12 and perf regs at +0x14/+0x1c: %#x %#x)\n",
-+	    nvt_rd(gcc, GCC_W2_S0_RCG), nvt_rd(gcc, GCC_W2_S0_RCG + 4u),
-+	    nvt_rd(gcc, GCC_W2_S0_RCG + 0x14u), nvt_rd(gcc, GCC_W2_S0_RCG + 0x1cu));
++	printf("SWEET NVT: wrap2 vote=%#x m_ahb=%#x s_ahb=%#x s0=%#x rcg=%#x cfg=%#x dfs=%#x/%#x\n",
++	    nvt_rd(nvt_gcc, GCC_VOTE), nvt_rd(nvt_gcc, GCC_W2_M_AHB),
++	    nvt_rd(nvt_gcc, GCC_W2_S_AHB), nvt_rd(nvt_gcc, GCC_W2_S0),
++	    nvt_rd(nvt_gcc, GCC_W2_S0_RCG), nvt_rd(nvt_gcc, GCC_W2_S0_RCG + 4u),
++	    nvt_rd(nvt_gcc, GCC_W2_S0_RCG + 0x14u), nvt_rd(nvt_gcc, GCC_W2_S0_RCG + 0x1cu));
++	nvt_pin(nvt_north, 12, "reset");
++	nvt_pin(nvt_south, 55, "spi");
++	nvt_pin(nvt_south, 56, "spi");
++	nvt_pin(nvt_south, 57, "spi");
++	nvt_pin(nvt_south, 58, "cs");
++	nvt_pin(nvt_south, 122, "irq");
 +
-+	nvt_pin(north, 12, "reset");
-+	nvt_pin(south, 55, "spi");
-+	nvt_pin(south, 56, "spi");
-+	nvt_pin(south, 57, "spi");
-+	nvt_pin(south, 58, "cs");
-+	nvt_pin(south, 122, "irq");
-+
-+	/* Does the interrupt pin move? 40 samples, 50 ms apart. */
-+	uint32_t last = nvt_rd(south, 122u * 0x1000u + 4u) & 1u;
-+	unsigned changes = 0;
-+	for (unsigned i = 0; i < 40; ++i) {
-+		nvt_wait(50);
-+		uint32_t now = nvt_rd(south, 122u * 0x1000u + 4u) & 1u;
-+		if (now != last) {
-+			++changes;
-+			last = now;
-+		}
++	if (stage >= 2) {
++		nvt_stage2();
 +	}
-+	printf("SWEET NVT: irq pin changes in 2 s: %u (final level %u)\n", changes, last);
 +	printf("SWEET NVT: probe done\n");
 +out:
 +	(void)thread_terminate(current_thread());
