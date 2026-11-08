@@ -6,7 +6,7 @@
  bsd/dev/sweet_rpmh.c			standard
 --- /dev/null
 +++ b/bsd/dev/sweet_nvt.c	2026-11-08 09:18:37.588236114 +0000
-@@ -0,0 +1,508 @@
+@@ -0,0 +1,517 @@
 +/*
 + * vayu Novatek touch bring-up (boot-arg sweettouch=2).
 + *
@@ -180,13 +180,22 @@
 +nvt_clocks(void)
 +{
 +	nvt_wr(nvt_gcc, GCC_VOTE, nvt_rd(nvt_gcc, GCC_VOTE) | (1u << 1) | (1u << 2) | (1u << 4));
-+	const uint32_t branches[] = {GCC_W2_M_AHB, GCC_W2_S_AHB, GCC_W2_S0};
-+	for (unsigned i = 0; i < 3; ++i) {
++	/*
++	 * s_ahb has HW_CTL (bit 1) set: the hardware gates it when idle, so it
++	 * reads "halted" until the first slave access and must not be waited on.
++	 */
++	const uint32_t branches[] = {GCC_W2_M_AHB, GCC_W2_S0};
++	for (unsigned i = 0; i < 2; ++i) {
 +		if (!nvt_wait_clear(nvt_gcc, branches[i], 1u << 31)) {
 +			printf("SWEET NVT: GCC branch %#x still halted (%#x) after vote %#x\n",
 +			    branches[i], nvt_rd(nvt_gcc, branches[i]), nvt_rd(nvt_gcc, GCC_VOTE));
 +			return false;
 +		}
++	}
++	uint32_t sahb = nvt_rd(nvt_gcc, GCC_W2_S_AHB);
++	if ((sahb & (1u << 31)) && !(sahb & 2u)) {
++		printf("SWEET NVT: s_ahb halted (%#x) and not hardware-gated; stopping\n", sahb);
++		return false;
 +	}
 +	uint32_t dfs = nvt_rd(nvt_gcc, GCC_W2_S0_RCG + 0x14u);
 +	uint32_t cfg = nvt_rd(nvt_gcc, GCC_W2_S0_RCG + 4u);
