@@ -6,14 +6,14 @@
  bsd/dev/sweet_rpmh.c			standard
 --- /dev/null
 +++ b/bsd/dev/sweet_nvt.c	2026-11-08 09:18:37.588236114 +0000
-@@ -0,0 +1,517 @@
+@@ -0,0 +1,564 @@
 +/*
 + * vayu Novatek touch bring-up (boot-arg sweettouch=2).
 + *
 + *   nvtstage=1 (default)  PASSIVE: read clock and pin state only, no writes.
 + *   nvtstage=2            ACTIVE PROBE: vote the QUP wrapper 2 clocks, set the
 + *                         touch pins, release the touch reset, configure the
-+ *                         SPI engine (se17, 0xc80000) and read the 6-byte
++ *                         SPI engine (se17 = wrapper 2 slot 3, 0xc8c000) and read the 6-byte
 + *                         Novatek chip ID. No firmware download, no input.
 + *
 + * Sources: Xiaomi vayu-r-oss nt36xxx driver (SPI framing, reset, chip ID),
@@ -39,15 +39,18 @@
 +#define NVT_NORTH_LEN   0x00020000u   /* pins 0..31 */
 +#define NVT_SOUTH_PA    0x03d00000u   /* TLMM 0x3000000 + SOUTH 0xd00000 */
 +#define NVT_SOUTH_LEN   0x00080000u   /* pins up to 127 */
-+#define NVT_SE_PA       0x00c80000u   /* QUP wrapper 2, slot 0 = se17 */
++#define NVT_W2_PA       0x00c80000u   /* QUP wrapper 2 base: se14..se19, 0x4000 apart */
++#define NVT_SE_SLOT     3u            /* se17 = pins 55-58 function "qup17" */
 +#define NVT_SE_LEN      0x00004000u
 +
 +/* gcc-sm8150.c, QUP wrapper 2, slot 0 */
 +#define GCC_VOTE        0x52014u      /* bit1 s_ahb, bit2 m_ahb, bit4 s0 clk */
 +#define GCC_W2_M_AHB    0x1e004u
 +#define GCC_W2_S_AHB    0x1e008u
-+#define GCC_W2_S0       0x1e144u
-+#define GCC_W2_S0_RCG   0x1e148u
++#define GCC_W2_SLOT_STEP 0x130u       /* per-slot stride of the branch/RCG registers */
++#define GCC_W2_S0       0x1e144u      /* slot 0 branch; slot n adds n*0x130 */
++#define GCC_W2_S0_RCG   0x1e148u      /* slot 0 RCG */
++#define GCC_W2_SN(base, n) ((base) + (n) * GCC_W2_SLOT_STEP)
 +
 +/* GENI serial engine registers (Linux qcom-geni-se.c / spi-geni-qcom.c) */
 +#define SE_FORCE_DEFAULT 0x020u
@@ -106,6 +109,8 @@
 +static int nvt_chan;
 +static bool nvt_started;
 +static vm_offset_t nvt_gcc, nvt_north, nvt_south, nvt_se;
++static unsigned nvt_slot = NVT_SE_SLOT;
++static bool nvt_dbg_done;
 +static unsigned nvt_tx_depth;      /* TX FIFO depth in 32-bit words */
 +static uint32_t nvt_last_irq;
 +
@@ -179,12 +184,12 @@
 +static bool
 +nvt_clocks(void)
 +{
-+	nvt_wr(nvt_gcc, GCC_VOTE, nvt_rd(nvt_gcc, GCC_VOTE) | (1u << 1) | (1u << 2) | (1u << 4));
++	nvt_wr(nvt_gcc, GCC_VOTE, nvt_rd(nvt_gcc, GCC_VOTE) | (1u << 1) | (1u << 2) | (1u << (4 + nvt_slot)));
 +	/*
 +	 * s_ahb has HW_CTL (bit 1) set: the hardware gates it when idle, so it
 +	 * reads "halted" until the first slave access and must not be waited on.
 +	 */
-+	const uint32_t branches[] = {GCC_W2_M_AHB, GCC_W2_S0};
++	const uint32_t branches[] = {GCC_W2_M_AHB, GCC_W2_SN(GCC_W2_S0, nvt_slot)};
 +	for (unsigned i = 0; i < 2; ++i) {
 +		if (!nvt_wait_clear(nvt_gcc, branches[i], 1u << 31)) {
 +			printf("SWEET NVT: GCC branch %#x still halted (%#x) after vote %#x\n",
@@ -197,28 +202,28 @@
 +		printf("SWEET NVT: s_ahb halted (%#x) and not hardware-gated; stopping\n", sahb);
 +		return false;
 +	}
-+	uint32_t dfs = nvt_rd(nvt_gcc, GCC_W2_S0_RCG + 0x14u);
-+	uint32_t cfg = nvt_rd(nvt_gcc, GCC_W2_S0_RCG + 4u);
++	uint32_t dfs = nvt_rd(nvt_gcc, GCC_W2_SN(GCC_W2_S0_RCG, nvt_slot) + 0x14u);
++	uint32_t cfg = nvt_rd(nvt_gcc, GCC_W2_SN(GCC_W2_S0_RCG, nvt_slot) + 4u);
 +	if (dfs & 1u) {
 +		/* SE CLK_SEL=0 selects DFS level 0. It must be XO/1 = 19.2 MHz. */
-+		uint32_t l0 = nvt_rd(nvt_gcc, GCC_W2_S0_RCG + 0x1cu);
++		uint32_t l0 = nvt_rd(nvt_gcc, GCC_W2_SN(GCC_W2_S0_RCG, nvt_slot) + 0x1cu);
 +		if ((l0 & 0x371fu) != 1u) {
 +			printf("SWEET NVT: DFS level0=%#x is not XO/1; stopping\n", l0);
 +			return false;
 +		}
 +	} else {
 +		cfg = (cfg & ~(0x371fu | (1u << 20))) | 1u;
-+		nvt_wr(nvt_gcc, GCC_W2_S0_RCG + 4u, cfg);
-+		nvt_wr(nvt_gcc, GCC_W2_S0_RCG, nvt_rd(nvt_gcc, GCC_W2_S0_RCG) | 1u);
-+		if (!nvt_wait_clear(nvt_gcc, GCC_W2_S0_RCG, 1u)) {
++		nvt_wr(nvt_gcc, GCC_W2_SN(GCC_W2_S0_RCG, nvt_slot) + 4u, cfg);
++		nvt_wr(nvt_gcc, GCC_W2_SN(GCC_W2_S0_RCG, nvt_slot), nvt_rd(nvt_gcc, GCC_W2_SN(GCC_W2_S0_RCG, nvt_slot)) | 1u);
++		if (!nvt_wait_clear(nvt_gcc, GCC_W2_SN(GCC_W2_S0_RCG, nvt_slot), 1u)) {
 +			printf("SWEET NVT: RCG update timeout\n");
 +			return false;
 +		}
 +	}
 +	printf("SWEET NVT: clocks on: vote=%#x m_ahb=%#x s_ahb=%#x s0=%#x rcg=%#x\n",
 +	    nvt_rd(nvt_gcc, GCC_VOTE), nvt_rd(nvt_gcc, GCC_W2_M_AHB),
-+	    nvt_rd(nvt_gcc, GCC_W2_S_AHB), nvt_rd(nvt_gcc, GCC_W2_S0),
-+	    nvt_rd(nvt_gcc, GCC_W2_S0_RCG));
++	    nvt_rd(nvt_gcc, GCC_W2_S_AHB), nvt_rd(nvt_gcc, GCC_W2_SN(GCC_W2_S0, nvt_slot)),
++	    nvt_rd(nvt_gcc, GCC_W2_SN(GCC_W2_S0_RCG, nvt_slot)));
 +	return true;
 +}
 +
@@ -363,6 +368,19 @@
 +		nvt_wr(nvt_se, SE_IRQ_CLR, irq & ((1u << 26) | (1u << 27) | (1u << 30)));
 +		delay(1);
 +	}
++	if (!nvt_dbg_done) {
++		nvt_dbg_done = true;
++		printf("SWEET NVT: xfer err=%d sent=%u got=%u status=%#x irq=%#x cmd=%#x tx=%#x rx=%#x clk_cfg=%#x clk_sel=%#x len=%#x/%#x\n",
++		    err, sent, got, nvt_rd(nvt_se, SE_STATUS), nvt_rd(nvt_se, SE_IRQ),
++		    nvt_rd(nvt_se, SE_CMD), nvt_rd(nvt_se, SE_TX_COUNT), nvt_rd(nvt_se, SE_RX_COUNT),
++		    nvt_rd(nvt_se, SE_MCLK), nvt_rd(nvt_se, SE_CLK_SEL),
++		    nvt_rd(nvt_se, SE_TX_LEN), nvt_rd(nvt_se, SE_RX_LEN));
++		printf("SWEET NVT: readback cgc=%#x dmagen=%#x outctl=%#x pack=%#x/%#x wm=%#x/%#x/%#x wordlen=%#x irqen=%#x\n",
++		    nvt_rd(nvt_se, SE_CGC_CTRL), nvt_rd(nvt_se, SE_DMA_GENERAL),
++		    nvt_rd(nvt_se, SE_OUTPUT_CTRL), nvt_rd(nvt_se, SE_TX_PACK0), nvt_rd(nvt_se, SE_TX_PACK1),
++		    nvt_rd(nvt_se, SE_TX_WM), nvt_rd(nvt_se, SE_RX_WM), nvt_rd(nvt_se, SE_RFR_WM),
++		    nvt_rd(nvt_se, SE_SPI_WORD_LEN), nvt_rd(nvt_se, SE_IRQ_EN));
++	}
 +	nvt_abort();
 +	return err;
 +}
@@ -421,10 +439,32 @@
 +	return id[3] == 0x75 && id[4] == 0x66 && id[5] == 0x03;
 +}
 +
++/* Do the candidate engines already have SPI firmware? Read-only, AHB clocks on. */
++static void
++nvt_scan_slots(void)
++{
++	nvt_wr(nvt_gcc, GCC_VOTE, nvt_rd(nvt_gcc, GCC_VOTE) | (1u << 1) | (1u << 2));
++	/* Only slot 0 (read before, safe) and the slot we will use: unknown engines may be secure. */
++	for (unsigned i = 0; i < 2; ++i) {
++		unsigned n = i == 0 ? 0u : nvt_slot;
++		if (i == 1 && n == 0) {
++			break;
++		}
++		vm_offset_t se = ml_io_map(NVT_W2_PA + n * NVT_SE_LEN, NVT_SE_LEN);
++		if (!se) {
++			continue;
++		}
++		uint32_t fw = nvt_rd(se, SE_FW);
++		printf("SWEET NVT: wrap2 slot %u (se%u @%#x): fw=%#x proto=%u status=%#x%s\n",
++		    n, 14u + n, NVT_W2_PA + n * NVT_SE_LEN, fw, (fw >> 8) & 0xffu,
++		    nvt_rd(se, SE_STATUS), n == nvt_slot ? "  <- used" : "");
++	}
++}
++
 +static void
 +nvt_stage2(void)
 +{
-+	nvt_se = ml_io_map(NVT_SE_PA, NVT_SE_LEN);
++	nvt_se = ml_io_map(NVT_W2_PA + nvt_slot * NVT_SE_LEN, NVT_SE_LEN);
 +	if (!nvt_se) {
 +		printf("SWEET NVT: se17 mapping failed\n");
 +		return;
@@ -489,9 +529,9 @@
 +
 +	printf("SWEET NVT: wrap2 vote=%#x m_ahb=%#x s_ahb=%#x s0=%#x rcg=%#x cfg=%#x dfs=%#x/%#x\n",
 +	    nvt_rd(nvt_gcc, GCC_VOTE), nvt_rd(nvt_gcc, GCC_W2_M_AHB),
-+	    nvt_rd(nvt_gcc, GCC_W2_S_AHB), nvt_rd(nvt_gcc, GCC_W2_S0),
-+	    nvt_rd(nvt_gcc, GCC_W2_S0_RCG), nvt_rd(nvt_gcc, GCC_W2_S0_RCG + 4u),
-+	    nvt_rd(nvt_gcc, GCC_W2_S0_RCG + 0x14u), nvt_rd(nvt_gcc, GCC_W2_S0_RCG + 0x1cu));
++	    nvt_rd(nvt_gcc, GCC_W2_S_AHB), nvt_rd(nvt_gcc, GCC_W2_SN(GCC_W2_S0, nvt_slot)),
++	    nvt_rd(nvt_gcc, GCC_W2_SN(GCC_W2_S0_RCG, nvt_slot)), nvt_rd(nvt_gcc, GCC_W2_SN(GCC_W2_S0_RCG, nvt_slot) + 4u),
++	    nvt_rd(nvt_gcc, GCC_W2_SN(GCC_W2_S0_RCG, nvt_slot) + 0x14u), nvt_rd(nvt_gcc, GCC_W2_SN(GCC_W2_S0_RCG, nvt_slot) + 0x1cu));
 +	nvt_pin(nvt_north, 12, "reset");
 +	nvt_pin(nvt_south, 55, "spi");
 +	nvt_pin(nvt_south, 56, "spi");
@@ -500,6 +540,13 @@
 +	nvt_pin(nvt_south, 122, "irq");
 +
 +	if (stage >= 2) {
++		int slot = (int)NVT_SE_SLOT;
++		(void)PE_parse_boot_argn("nvtslot", &slot, sizeof(slot));
++		if (slot < 0 || slot > 5) {
++			slot = (int)NVT_SE_SLOT;
++		}
++		nvt_slot = (unsigned)slot;
++		nvt_scan_slots();
 +		nvt_stage2();
 +	}
 +	printf("SWEET NVT: probe done\n");
